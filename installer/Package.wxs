@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  The installer. It asks where the server should go: into the profile of the person installing —
+  what it offers first — which is the folder the server keeps its configuration, log, database
+  and certificate in anyway, or into "Program Files" for everyone, in which case the server keeps
+  those files in the profile of whoever runs it.
+
+  Administrator rights are asked for once, by Windows, when the questions are over and the
+  install begins. The server itself asks for them at every start: capture, the encoder session
+  and injected input all need them, and that is the server's business rather than this file's.
+
+  The server itself is all this package holds. What it needs and does not carry — the .NET
+  runtime, and the ViGEmBus driver for gamepads — is the bundle's business; see Bundle.wxs.
+
+  Built by build.ps1, which takes the version and the publisher from the csproj so that the
+  installer cannot say one thing while the exe says another:
+      wix build -arch x64 -d Version=0.7.0 -d Manufacturer=lysnet.ru -d Exe=...
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="Remote Game Hub"
+           Manufacturer="$(Manufacturer)"
+           Version="$(Version)"
+           UpgradeCode="91DDC640-BBAE-4574-9FC1-A8389087E1EE"
+           Scope="perUserOrMachine"
+           Compressed="yes">
+
+    <!-- One file in one cab inside the msi: there is nothing to stream separately. -->
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- An older version is replaced rather than added beside: two copies of the server would
+         fight over the same ports, and the second one exits at its mutex anyway. The same version
+         counts as an upgrade too — without that, installing a rebuild of the number already there
+         leaves both, and during a run of testing that happens more often than a version change
+         does. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Remote Game Hub is already installed." />
+
+    <!-- Windows 11 x64 and nothing older, checked before anything is copied: the capture, both
+         encoders and the injected input are all written against it, and there is no fallback.
+
+         The build number comes from the registry and not from WindowsBuild, which Windows does not
+         tell an msi the truth about: this machine is build 28000 and the property said 9600, with
+         VersionNT capped at 603, the version-lie every unmanifested program is given. -->
+    <Property Id="WINDOWSBUILDNUMBER">
+      <RegistrySearch Id="WindowsBuildSearch"
+                      Root="HKLM"
+                      Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                      Name="CurrentBuildNumber"
+                      Type="raw"
+                      Bitness="always64" />
+    </Property>
+
+    <Launch Condition="VersionNT64 AND WINDOWSBUILDNUMBER &gt;= 22000"
+            Message="Remote Game Hub needs 64-bit Windows 11 or newer. This machine does not meet that, and nothing has been installed." />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/andrey-lysikov/remote-gamehub" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- Where to put it: the dialog that asks stands on these two, and the profile of the person
+         installing is what it offers first. The questions are answered without administrator
+         rights; what needs them — the driver and the server itself — asks when it is reached. -->
+    <Property Id="ApplicationFolderName" Value="Remote-Gamehub" />
+    <Property Id="WixAppFolder" Value="WixPerUserFolder" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="APPLICATIONFOLDER" Name="Remote-Gamehub" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+    <StandardDirectory Id="TempFolder" />
+
+    <!-- "Just me" would otherwise land in AppData\Local\Apps\Remote-Gamehub. The server keeps
+         its files beside the exe unless the exe is in a system folder, and the folder it falls
+         back to then is AppData\Local\Remote-Gamehub — so putting the exe there means the exe,
+         the configuration and the log are in one place whichever way it was installed. -->
+    <SetProperty Id="WixPerUserFolder"
+                 Value="[LocalAppDataFolder]Remote-Gamehub"
+                 After="WixSetDefaultPerUserFolder"
+                 Sequence="both" />
+
+    <!-- And "for everyone" would otherwise land in Program Files (x86): the folder the dialog
+         suggests comes from ProgramFilesFolder, which means the 32-bit one even in a 64-bit
+         package. This server is x64 and belongs in Program Files proper. -->
+    <SetProperty Id="WixPerMachineFolder"
+                 Value="[ProgramFiles64Folder]Remote-Gamehub"
+                 After="WixSetDefaultPerMachineFolder"
+                 Sequence="both" />
+
+    <?define ShortcutName = "Remote Game Hub" ?>
+    <?define ShortcutNote = "Game and desktop streaming to Moonlight clients" ?>
+
+    <!-- The server is a single exe. Everything it needs beyond .NET comes with the display
+         driver. -->
+    <ComponentGroup Id="AppFiles" Directory="APPLICATIONFOLDER">
+      <Component Id="MainExe" Guid="F7D96560-E799-4DE3-ADDD-C7085743FF44">
+        <File Id="RemoteGameHubExe" Source="$(Exe)" Name="Remote-Gamehub.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- What the server needs and this package does not carry: the .NET runtime and, for
+         gamepads, the ViGEmBus driver. The script looks at what is installed, asks their authors
+         what the newest is, and fetches only what is missing or behind — on this machine, at the
+         moment of installing. It has no business next to the exe once that is done, so it is put
+         in the temporary folder rather than the application's own, and deletes itself as its
+         last line: nothing of this survives the install that put it there. -->
+    <ComponentGroup Id="PrerequisiteFiles" Directory="TempFolder">
+      <Component Id="PrerequisiteScript" Guid="3C2B9A61-8E4F-4D7A-9B1C-5F0E2D6A7B84">
+        <File Id="PrerequisitesPs1" Source="$(Prerequisites)" Name="Prerequisites.ps1"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- The shortcut sits directly in the menu rather than in a folder of its own: one entry does
+         not deserve a folder to be opened first. Not advertised — an advertised shortcut shows no
+         icon unless one is named in the msi, and it drags the repair machinery in behind it for
+         a single file that either exists or does not. -->
+    <ComponentGroup Id="StartMenuShortcutFiles" Directory="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="7751937F-1686-474E-BBB6-701852521CDF">
+        <Shortcut Id="StartMenuShortcutEntry"
+                  Name="$(ShortcutName)"
+                  Description="$(ShortcutNote)"
+                  Target="[APPLICATIONFOLDER]Remote-Gamehub.exe"
+                  WorkingDirectory="APPLICATIONFOLDER"
+                  Icon="AppIcon.ico" />
+
+        <!-- A shortcut cannot be a key path, so the mark of the component lives in the registry,
+             under the user who asked for it. -->
+        <RegistryValue Root="HKCU"
+                       Key="Software\Remote-Gamehub"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="DesktopShortcutFiles" Directory="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="B5077057-1950-40B9-A649-FCFFD37BE524">
+        <Shortcut Id="DesktopShortcutEntry"
+                  Name="$(ShortcutName)"
+                  Description="$(ShortcutNote)"
+                  Target="[APPLICATIONFOLDER]Remote-Gamehub.exe"
+                  WorkingDirectory="APPLICATIONFOLDER"
+                  Icon="AppIcon.ico" />
+
+        <RegistryValue Root="HKCU"
+                       Key="Software\Remote-Gamehub"
+                       Name="DesktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- The two checkboxes, on by default. Each drives a feature of its own rather than a
+         condition on the component: a feature left out at install is remembered as left out, and
+         a component switched off by a condition would go looking for that condition again when
+         the time comes to remove it. -->
+    <Property Id="INSTALLSTARTMENUSHORTCUT" Value="1" />
+    <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
+
+    <!-- On by default: the client's pads are what most people stream games for. The driver is
+         machine-wide and shared — Sunshine and others use the same one — so it is left in place
+         when this server is removed. -->
+    <Property Id="INSTALLVIGEM" Value="1" />
+
+    <!-- Whether the bus driver is already there, and whether it was left switched off: its
+         service exists once it is installed, whichever setup put it in, and a raw read gives the
+         start type as "#4" when it is disabled. Only the question on the page hangs on these —
+         which version is installed, and whether it is the newest, is the script's to answer. -->
+    <Property Id="VIGEMINSTALLED">
+      <RegistrySearch Id="ViGEmSearch"
+                      Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\ViGEmBus"
+                      Name="ImagePath"
+                      Type="raw"
+                      Bitness="always64" />
+    </Property>
+
+    <Property Id="VIGEMSTART">
+      <RegistrySearch Id="ViGEmStartSearch"
+                      Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\ViGEmBus"
+                      Name="Start"
+                      Type="raw"
+                      Bitness="always64" />
+    </Property>
+
+    <Feature Id="Main"
+             Title="Remote Game Hub"
+             Description="The server itself."
+             Level="1"
+             AllowAbsent="no"
+             ConfigurableDirectory="APPLICATIONFOLDER">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="PrerequisiteFiles" />
+
+      <Feature Id="StartMenu" Title="Start menu shortcut"
+               Description="A shortcut in the Start menu." Level="1">
+        <ComponentGroupRef Id="StartMenuShortcutFiles" />
+        <Level Value="0" Condition="INSTALLSTARTMENUSHORTCUT &lt;&gt; 1" />
+      </Feature>
+
+      <Feature Id="Desktop" Title="Desktop shortcut"
+               Description="A shortcut on the desktop." Level="1">
+        <ComponentGroupRef Id="DesktopShortcutFiles" />
+        <Level Value="0" Condition="INSTALLDESKTOPSHORTCUT &lt;&gt; 1" />
+      </Feature>
+
+    </Feature>
+
+    <!-- Run when this install is over rather than inside it: both setups it may reach for are
+         Windows Installer packages of their own, which cannot run while this one does, and both
+         raise their own prompt for the rights they need. Its window is a console, and it is the
+         only window this project ever shows — what it fetches is worth watching.
+
+         Its outcome is ignored here: the script says what it did, and a driver that would not go
+         in is a stream without pads, not a server that failed to install. -->
+    <CustomAction Id="InstallPrerequisites"
+                  Directory="TempFolder"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[TempFolder]Prerequisites.ps1&quot; [DRIVERSWITCH]"
+                  Return="ignore" />
+
+    <!-- The cleared checkbox travels to the script as its one switch. -->
+    <SetProperty Id="DRIVERSWITCH" Value="-NoDriver" Before="InstallPrerequisites"
+                 Sequence="execute" Condition="INSTALLVIGEM &lt;&gt; 1" />
+
+    <!-- A copy that is running holds the ports and the exe, on the way in and on the way out. It
+         has no window for a close message to reach and runs elevated, so it is asked from the
+         elevated side and then ended: nothing here can be closed by asking politely. -->
+    <util:CloseApplication Id="CloseRunningServer"
+                           Target="Remote-Gamehub.exe"
+                           CloseMessage="yes"
+                           ElevatedCloseMessage="yes"
+                           TerminateProcess="0"
+                           RebootPrompt="no"
+                           Timeout="10" />
+
+    <!-- "Start with Windows" is a scheduled task the server makes for itself from its tray menu,
+         named after the product — see App/Autostart.cs. The installer knows nothing about it
+         beyond the name, so it is removed here on uninstall, and a failure is not worth stopping
+         an uninstall over. -->
+    <CustomAction Id="RemoveAutostartTask"
+                  Directory="APPLICATIONFOLDER"
+                  ExeCommand="[System64Folder]schtasks.exe /delete /tn &quot;Remote Game Hub&quot; /f"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- On an install and on an upgrade, which is where a runtime that has moved on since the
+           last one is noticed; never on the way out. -->
+      <Custom Action="InstallPrerequisites" After="InstallFinalize" Condition="NOT Installed" />
+      <Custom Action="RemoveAutostartTask" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+
+    <!-- The advanced set is the one that asks whom the install is for, and brings the folder page
+         with it: for everyone or for me, and where it goes. -->
+    <ui:WixUI Id="WixUI_Advanced" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(License)" />
+
+    <!-- The server is started when the installer closes, unless the checkbox on the shortcuts
+         page says otherwise. There is nothing to see after an install otherwise: the server has
+         no window, only an icon in the notification area, and someone who has just installed it
+         wants to pair a client now rather than hunt for the shortcut.
+
+         Through the shell rather than started directly: the server demands administrator rights,
+         and a program started by the installer itself never gets the prompt for them — it simply
+         fails. The shell shows the prompt.
+
+         The last page belongs to the part of the installer that runs as the person installing,
+         not to the elevated half, so the server comes up as them and reads their configuration. -->
+    <Property Id="LAUNCHAFTERINSTALL" Value="1" />
+
+    <CustomAction Id="SetAppTarget" Property="WixShellExecTarget" Value="[#RemoteGameHubExe]" />
+    <CustomAction Id="LaunchApplication" DllEntry="WixShellExec" BinaryRef="Wix4UtilCA_X64" Impersonate="yes" />
+
+    <!-- Our page of shortcuts, put between the folder page and the last one.
+
+         Where a button already carries a jump of the stock set, ours has to come after it: several
+         events on one button run in order of Ordering, and of two that both name a next dialog the
+         later one decides. Hence the tens — the set uses one to seven.
+
+         The first page is left alone: "Install" installs there and then, with everything at its
+         default — for the person installing, into their profile, with both shortcuts — and
+         "Advanced" opens the questions below. -->
+    <UI>
+      <!-- After the choice of whom it is for, the stock set goes to the folder page when the
+           install is for everyone and skips to the feature tree otherwise. That other half is
+           claimed here, so both ways reach the folder and the shortcuts behind it. -->
+      <Publish Dialog="InstallScopeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg"
+               Condition="WixAppFolder = &quot;WixPerUserFolder&quot;" Order="10" />
+
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ShortcutsDlg" Order="10" />
+      <Publish Dialog="ShortcutsDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+      <Publish Dialog="ShortcutsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+
+      <!-- The way back is only claimed while installing. During maintenance the last page is
+           reached from the repair-or-remove page and has to return there, and a page about
+           shortcuts to be created has nothing to say then. -->
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutsDlg"
+               Condition="NOT Installed" Order="10" />
+
+      <!-- Only after a fresh install: the same page ends a repair and an uninstall too, and
+           starting the server at the end of its own removal would be a poor joke. The stock event
+           that closes the page sits at 999, so both of these run before it. -->
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="SetAppTarget"
+               Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed" Order="1" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication"
+               Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed" Order="2" />
+    </UI>
+  </Package>
+</Wix>

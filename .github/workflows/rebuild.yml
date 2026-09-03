@@ -1,0 +1,105 @@
+name: Rebuild
+
+# Replaces the files attached to a release with ones built from the current state of the branch.
+# Started by hand only: the version, the tag and the description of the release stay as they are —
+# the only thing that changes is the files themselves, and the link to the list of commits, which
+# is pointed at what was actually built.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to rebuild. Empty means the newest release.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The whole history: the description of the release links to the commits, and that link
+          # is rewritten below.
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      - name: Find the release
+        id: target
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.event.inputs.tag }}'.Trim()
+          if (-not $tag) { $tag = gh release view --json tagName --jq '.tagName' }
+          if ($LASTEXITCODE -ne 0 -or -not $tag) { throw 'No release to rebuild.' }
+
+          Write-Host "Rebuilding the installer of $tag from $($env:GITHUB_SHA)"
+
+          # The installer carries a version of its own, and it has to be the one on the release
+          # page rather than whatever the branch has moved on to. Two numbers, as everywhere in
+          # this project; a third is tolerated.
+          $version = $tag -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+(\.\d+)?$') { throw "The tag $tag is not a version." }
+
+          "tag=$tag"         >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        shell: pwsh
+        # The same script a developer runs: the exe, then the installer around it. The version is
+        # the one of the release being rebuilt rather than of the branch: the tag stays as it is,
+        # and an installer announcing another number would contradict the page it hangs on.
+        run: ./build.ps1 -Installer -Version ${{ steps.target.outputs.version }}
+
+      - name: Replace the files
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload ${{ steps.target.outputs.tag }} 'build/Remote-Gamehub.msi' 'build/Remote-Gamehub.exe' --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'The files were not uploaded.' }
+
+      - name: Point the list of commits at what was built
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.target.outputs.tag }}'
+          $sha = '${{ github.sha }}'
+
+          # Only the one line with the link is touched. Everything the release says about the
+          # version itself was written by hand and is left alone.
+          # gh hands the description back line by line, so it is joined and split once more:
+          # the lines then carry no stray carriage returns.
+          $body = (gh release view $tag --json body --jq '.body') -join "`n"
+          $lines = $body -split "`r?`n"
+          $changed = $false
+
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch 'Full list of changes') { continue }
+
+            $line = [regex]::Replace($lines[$i], '(/compare/[^\s/]+\.\.\.)\S+', ('${1}' + $sha))
+            $line = [regex]::Replace($line, '(/commits/)\S+', ('${1}' + $sha))
+
+            if ($line -ne $lines[$i]) { $lines[$i] = $line; $changed = $true }
+          }
+
+          if (-not $changed) {
+            Write-Host 'No link to the commits in the description — it is left as it is.'
+            "## Rebuilt`n`nThe files of $tag were replaced with a build of $sha." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          Set-Content -Path 'release-notes.md' -Value ($lines -join "`n") -Encoding utf8
+          gh release edit $tag --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'The description was not updated.' }
+
+          "## Rebuilt`n`nThe files of $tag were replaced with a build of $sha, and the list of commits now ends there." >> $env:GITHUB_STEP_SUMMARY

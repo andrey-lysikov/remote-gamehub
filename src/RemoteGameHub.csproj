@@ -1,0 +1,107 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- WinForms only, and only for the tray icon. There is no window in this application, so
+         there is no reason to carry a presentation framework that exists to draw one. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Direct3D and the encoder are reached through function pointers into their virtual tables.
+         See Native/Com.cs for why that is preferred to [ComImport] declarations. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Remote-Gamehub</AssemblyName>
+    <RootNamespace>RemoteGameHub</RootNamespace>
+  </PropertyGroup>
+
+  <!-- All of this shows in the exe properties and in the Explorer details pane -->
+  <PropertyGroup>
+    <Product>Remote Game Hub</Product>
+    <Company>lysnet.ru</Company>
+    <Authors>Andrey.Lysikov and Claude</Authors>
+    <Copyright>© Andrey Lysikov, Apache 2.0 licence.</Copyright>
+    <Description>Desktop and game streaming to Moonlight clients, encoded on the graphics card.</Description>
+    <Version>0.7</Version>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The one drawing: the executable, the shortcut, the installed-programs list and the tray
+         all use it. There were four more, one per notification-area theme; the coloured one is
+         drawn the same on every theme and the others were four files to keep in step for nothing. -->
+    <IconFile>$(MSBuildThisFileDirectory)..\pictures\RemoteGameHub.ico</IconFile>
+    <ApplicationIcon>$(IconFile)</ApplicationIcon>
+    <!-- The minimum of Windows 11 (build 22000) is checked at run time, in PlatformGuard.cs.
+         It cannot be declared through SupportedOSPlatformVersion: that property needs a versioned
+         TFM (net10.0-windows10.0.22000.0), which drags in the Windows SDK projections and adds
+         tens of megabytes to the exe. -->
+  </PropertyGroup>
+
+  <!-- One exe, but without .NET inside: the machine needs .NET Desktop Runtime 10 or newer.
+       When it is missing, the window with the download link is shown by the apphost itself —
+       before the first line of C#, so this cannot be checked in code. -->
+  <PropertyGroup>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Built for net10.0 (LTS until November 2028); runs on 11 and newer too -->
+    <RollForward>LatestMajor</RollForward>
+    <PublishTrimmed>false</PublishTrimmed>
+    <!-- So that no .pdb appears next to the exe -->
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- WFO0003: the WinForms analyser suggests setting DPI through ApplicationHighDpiMode instead
+         of the manifest. The manifest is right here: capture works in physical pixels, and the
+         awareness has to be in force before the first line of code runs. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The same icon again, this time inside the executable: the tray asks for it by name at run
+         time, and the Win32 resource above is not readable as a stream. Embedded rather than
+         shipped beside the exe, because one exe was promised and an icon that could be missing
+         would be missing exactly when someone first looks for the server. -->
+    <EmbeddedResource Include="$(IconFile)"
+                      LogicalName="RemoteGameHub.Icons.%(Filename)%(Extension)" />
+
+
+    <!-- The picture a client shows beside "Desktop". Embedded rather than fetched or looked for on
+         disk: it is the one entry in the list that is always there, on every machine, and a cover
+         that depends on a file being present would be missing exactly when someone first looks. -->
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)..\pictures\desktop-cover.png"
+                      LogicalName="RemoteGameHub.Art.desktop-cover.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The parsers, the pairing exchange and the library are tested as they are, internal:
+         making them public just for the tests would mean shaping the server around the way it
+         is verified. -->
+    <InternalsVisibleTo Include="RemoteGameHub.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The store of clients that have paired, and whatever else later needs to outlive a run.
+         A file rather than a service, and SQLite rather than a format of this project's own: the
+         first question asked of any stored data is "what is actually in it", and that is answered
+         by any of a dozen tools for this one. The native library it carries is unpacked beside the
+         executable at first run, which is what IncludeNativeLibrariesForSelfExtract is for. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.2" />
+    <!-- Pinned explicitly, above what Microsoft.Data.Sqlite 10.0.2 would pull in on its own: the
+         2.1.11 native library carries SQLite 3.49, which has a published memory-corruption defect
+         (GHSA-2m69-gcr7-jv3q / CVE-2025-6965, fixed in SQLite 3.50.2). 2.1.13 carries 3.53.3.
+         Remove this line only when Microsoft.Data.Sqlite itself references a fixed bundle. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+    <!-- Opus, in pure C#, for the audio stream. Windows has no Opus encoder and neither does
+         .NET, and the negotiated audio (48 kHz, stereo or 5.1) is not something WASAPI or Media
+         Foundation can hand out in the shape Moonlight needs. Concentus is a managed port of the
+         reference encoder, so it adds no native dependency and does not break the single
+         executable — the one place a dependency was unavoidable, kept managed. -->
+    <PackageReference Include="Concentus" Version="2.2.2" />
+  </ItemGroup>
+
+</Project>

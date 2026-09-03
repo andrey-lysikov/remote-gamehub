@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  One dialog of our own, wedged into the stock advanced set between the folder page and the last
+  one: where the shortcuts go. The stock sets have no page for that — they offer a tree of
+  features instead, which names the same two things in the language of an installer rather than
+  in the language of someone installing.
+
+  The geometry follows the stock dialogs exactly (370 x 270, the banner at the top, the buttons at
+  the bottom), or this page would jump when it comes up between two of theirs.
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI>
+      <Dialog Id="ShortcutsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes"
+                 NoPrefix="yes" Text="{\WixUI_Font_Title}Shortcuts and start" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
+                 Transparent="yes" NoPrefix="yes" Text="Where to put [ProductName], and whether to start it." />
+
+        <Control Id="StartMenuCheckBox" Type="CheckBox" X="20" Y="70" Width="330" Height="17"
+                 Property="INSTALLSTARTMENUSHORTCUT" CheckBoxValue="1"
+                 Text="Add a shortcut to the Start menu" />
+
+        <Control Id="DesktopCheckBox" Type="CheckBox" X="20" Y="95" Width="330" Height="17"
+                 Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1"
+                 Text="Add a shortcut to the desktop" />
+
+        <!-- The same question the stock last page can ask, asked here instead: there the checkbox
+             is drawn by a control of the set over the white of that page and comes out in a grey
+             box of its own. Here it sits on the same ground as the two above it. -->
+        <Control Id="LaunchCheckBox" Type="CheckBox" X="20" Y="120" Width="330" Height="17"
+                 Property="LAUNCHAFTERINSTALL" CheckBoxValue="1"
+                 Text="Start the server when the installer finishes" />
+
+        <!-- The one accessory, and the one line on this page that installs something beyond the
+             server. Shown only where there is a decision to make: a driver already installed and
+             running is not asked about, and is updated with everything else if it has moved on. -->
+        <Control Id="ViGEmCheckBox" Type="CheckBox" X="20" Y="145" Width="330" Height="17"
+                 Property="INSTALLVIGEM" CheckBoxValue="1"
+                 HideCondition="VIGEMINSTALLED AND VIGEMSTART &lt;&gt; &quot;#4&quot;"
+                 Text="Install the ViGEmBus driver, which presents the client's gamepads to games" />
+
+        <Control Id="Note" Type="Text" X="20" Y="172" Width="330" Height="55" Transparent="yes"
+                 NoPrefix="yes"
+                 Text="The server lives in the notification area: it has no window of its own, and a shortcut is what starts it the first time. Its tray menu can make it start with Windows from then on. What the server needs and does not carry — the .NET runtime, and the driver above — is fetched when the installer finishes, and only if it is missing or out of date." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="!(loc.WixUIBack)" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes"
+                 Text="!(loc.WixUINext)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes"
+                 Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+    </UI>
+  </Fragment>
+</Wix>

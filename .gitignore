@@ -1,0 +1,25 @@
+# Build output. The application writes its configuration and log next to the executable, so this
+# folder holds user files as well and is never removed wholesale by the build script.
+build/
+
+# What MSBuild leaves beside the sources.
+bin/
+obj/
+
+# Visual Studio and Rider
+.vs/
+.idea/
+*.user
+
+# The application's own files, wherever a test run leaves them.
+Remote-Gamehub.conf
+Remote-Gamehub.log
+Remote-Gamehub.log.old
+# The server's own certificate and private key, made on the first run.
+Remote-Gamehub.pem
+Remote-Gamehub-capture.png
+Remote-Gamehub.db
+covers/
+# What WiX leaves beside the installer sources; build.ps1 clears it after every run.
+installer/obj/
+*.wixpdb
