@@ -98,7 +98,6 @@ internal static unsafe class Wasapi
     internal const ushort VT_BLOB = 65;
 
     internal const uint STGM_READ = 0;
-    internal const uint STGM_READWRITE = 2;
 
     // ------------------------------------------------------------------ the runtime
 
@@ -170,17 +169,6 @@ internal static unsafe class Wasapi
                 Com.VTable(enumerator)[4])(enumerator, dataFlow, role, result);
     }
 
-    // Slot 5: GetDevice(LPCWSTR id, IMMDevice**). Reopens by the id GetDeviceId once handed back —
-    // what the format is restored on, since nothing here holds a device open between the two.
-    internal static int GetDevice(void* enumerator, string id, out void* device)
-    {
-        device = null;
-        fixed (char* text = id)
-        fixed (void** result = &device)
-            return ((delegate* unmanaged[Stdcall]<void*, char*, void**, int>)
-                Com.VTable(enumerator)[5])(enumerator, text, result);
-    }
-
     // ------------------------------------------------------------------ IMMDeviceCollection
 
     // Slot 3: GetCount(UINT*)
@@ -213,13 +201,14 @@ internal static unsafe class Wasapi
                 Com.VTable(device)[3])(device, id, CLSCTX_ALL, null, output);
     }
 
-    // Slot 4: OpenPropertyStore(DWORD access, IPropertyStore**)
-    internal static int OpenPropertyStore(void* device, out void* store, uint access = STGM_READ)
+    // Slot 4: OpenPropertyStore(DWORD access, IPropertyStore**). Read-only: nothing is written
+    // through the property store any more, PolicyConfig's own SetDeviceFormat is what changes one.
+    internal static int OpenPropertyStore(void* device, out void* store)
     {
         store = null;
         fixed (void** result = &store)
             return ((delegate* unmanaged[Stdcall]<void*, uint, void**, int>)
-                Com.VTable(device)[4])(device, access, result);
+                Com.VTable(device)[4])(device, STGM_READ, result);
     }
 
     // Slot 5: GetId(LPWSTR*)
@@ -319,46 +308,18 @@ internal static unsafe class Wasapi
         }
     }
 
-    // Writes the device's shared-mode format back, from bytes GetDeviceFormat once returned — its
-    // own, to put back, or one built from it with only the channel count and mask changed.
-    internal static bool SetDeviceFormat(void* device, byte[] format)
+    // PolicyConfig.h slot 6: SetDeviceFormat(PCWSTR deviceId, WAVEFORMATEX* endpoint, WAVEFORMATEX*
+    // mix). The one call that really reconfigures the engine, not just what a property says about
+    // it: writing PKEY_AudioEngine_DeviceFormat by hand through the property store left every
+    // client that opened the device afterwards refused with AUDCLNT_E_UNSUPPORTED_FORMAT — the
+    // property changed, the engine underneath it did not. Both formats are the one asked for: this
+    // server never touches exclusive mode, and the Sound control panel sets them the same way.
+    internal static int SetDeviceFormat(void* policy, string deviceId, byte[] format)
     {
-        if (OpenPropertyStore(device, out var store, STGM_READWRITE) < 0 || store is null)
-            return false;
-
-        var blob = Marshal.AllocCoTaskMem(format.Length);
-
-        try
-        {
-            Marshal.Copy(format, 0, blob, format.Length);
-
-            var variant = stackalloc byte[24];
-            new Span<byte>(variant, 24).Clear();
-            *(ushort*)variant = VT_BLOB;
-            *(uint*)(variant + 8) = (uint)format.Length;
-            *(nint*)(variant + 16) = blob;
-
-            var key = new PropertyKey
-            {
-                FormatId = PKEY_AudioEngine_DeviceFormat_Format,
-                PropertyId = PKEY_AudioEngine_DeviceFormat_Id,
-            };
-
-            // IPropertyStore slot 6: SetValue(REFPROPERTYKEY, REFPROPVARIANT)
-            if (((delegate* unmanaged[Stdcall]<void*, PropertyKey*, byte*, int>)
-                    Com.VTable(store)[6])(store, &key, variant) < 0)
-                return false;
-
-            // IPropertyStore slot 7: Commit()
-            return ((delegate* unmanaged[Stdcall]<void*, int>)Com.VTable(store)[7])(store) >= 0;
-        }
-        finally
-        {
-            // SetValue does not take ownership of a variant's memory; this is still ours to free,
-            // and only after the call — Commit is what the store actually reads the bytes for.
-            Marshal.FreeCoTaskMem(blob);
-            Com.Release(store);
-        }
+        fixed (char* id = deviceId)
+        fixed (byte* bytes = format)
+            return ((delegate* unmanaged[Stdcall]<void*, char*, byte*, byte*, int>)
+                Com.VTable(policy)[6])(policy, id, bytes, bytes);
     }
 
     [DllImport("ole32.dll")]

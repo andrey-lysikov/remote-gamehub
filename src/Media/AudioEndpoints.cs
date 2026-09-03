@@ -81,7 +81,7 @@ internal static unsafe class AudioEndpoints
     // depth and its sample type exactly as they were — only the channel count and the speaker mask
     // change. Returns the format as it was, to be handed back to SetDeviceFormat afterwards; null
     // when nothing was changed, whether because it did not need to be or because it would not.
-    internal static byte[]? Widen(void* device, int channels)
+    internal static byte[]? Widen(void* device, string deviceId, int channels)
     {
         var mask = channels switch
         {
@@ -106,7 +106,16 @@ internal static unsafe class AudioEndpoints
         var wider = new byte[size];
         MemoryMarshal.Write(wider, in format);
 
-        return Wasapi.SetDeviceFormat(device, wider) ? was : null;
+        void* policy = null;
+        try
+        {
+            policy = Wasapi.CreatePolicyConfig();
+            return Wasapi.SetDeviceFormat(policy, deviceId, wider) >= 0 ? was : null;
+        }
+        finally
+        {
+            Com.Release(policy);
+        }
     }
 
     // Every playback device with what each mixes into, once at startup: surround is a property of
@@ -273,7 +282,7 @@ internal sealed unsafe class AudioAdaptation : IDisposable
     {
         if (AudioEndpoints.MixChannelsOf(device) >= channels) return (null, null);
 
-        var previous = AudioEndpoints.Widen(device, channels);
+        var previous = AudioEndpoints.Widen(device, deviceId, channels);
         if (previous is null)
         {
             Log.Info($"\"{SurroundDevice}\" could not be widened to {channels} channels; " +
@@ -317,22 +326,17 @@ internal sealed unsafe class AudioAdaptation : IDisposable
         _restored = true;
 
         var initialised = Wasapi.CoInitializeEx(0, Wasapi.COINIT_MULTITHREADED);
-        void* enumerator = null;
-        void* widened = null;
+        void* policy = null;
 
         try
         {
-            // The format first, while the device is still known by an id that need not be the
-            // default any more once the line after this puts the sound back where it came from.
+            // The format first: nothing here needs the device itself, PolicyConfig takes the id.
             if (_widenedId is not null && _previousFormat is not null)
             {
-                enumerator = Wasapi.CreateDeviceEnumerator();
-                if (Wasapi.GetDevice(enumerator, _widenedId, out widened) >= 0 && widened is not null)
-                {
-                    Log.Event(Wasapi.SetDeviceFormat(widened, _previousFormat)
-                        ? $"\"{SurroundDevice}\" is back to the format it had"
-                        : $"\"{SurroundDevice}\" could not be put back to the format it had");
-                }
+                policy = Wasapi.CreatePolicyConfig();
+                Log.Event(Wasapi.SetDeviceFormat(policy, _widenedId, _previousFormat) >= 0
+                    ? $"\"{SurroundDevice}\" is back to the format it had"
+                    : $"\"{SurroundDevice}\" could not be put back to the format it had");
             }
 
             if (_previousId is not null)
@@ -345,8 +349,7 @@ internal sealed unsafe class AudioAdaptation : IDisposable
         }
         finally
         {
-            Com.Release(widened);
-            Com.Release(enumerator);
+            Com.Release(policy);
             if (initialised >= 0) Wasapi.CoUninitialize();
         }
     }
