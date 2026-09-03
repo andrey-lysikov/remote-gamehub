@@ -41,6 +41,5 @@ name, type the digits and press Save.
 ## Tech
 
 - Written in C#, for Windows 11 or newer
-- A discrete NVIDIA or AMD card only. With no monitor connected you need an EDID emulator.
-- The installer fetches whichever of these is missing: the .NET Desktop Runtime, and — for
-  controllers — **ViGEmBus** ([github.com/nefarius/ViGEmBus](https://github.com/nefarius/ViGEmBus/releases))
+- Discrete NVIDIA or AMD card only. If no monitor connected, you need an EDID emulator.
+- **ViGEmBus** ([github.com/nefarius/ViGEmBus](https://github.com/nefarius/ViGEmBus/releases))
