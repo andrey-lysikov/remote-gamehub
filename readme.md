@@ -27,6 +27,12 @@ clients. Fully compatible with the stock
 
 *WARNING: the application is not signed, so Windows will ask you to allow it to run.*
 
+## Screenshots
+
+<p align="center">
+  <img src="pictures/status.jpg" height="600">
+</p>
+
 ## Pairing
 
 There is nothing to set up. A client asks and shows four digits. You need open status page in browser (example: http://localhost or http://hostname), and on the page you give the device a

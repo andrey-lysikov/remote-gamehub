@@ -91,7 +91,6 @@ jobs:
         run: |
           gh release create ${{ steps.check.outputs.tag }} `
             'build/Remote-Gamehub.msi' `
-            'build/Remote-Gamehub.exe' `
             --title '${{ steps.check.outputs.tag }}' `
             --notes-file release-notes.md `
             --target ${{ github.sha }}

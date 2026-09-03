@@ -2,7 +2,7 @@
 
 ## 0.7
 
-* Bugfix audo channels
+* Bugfix audio channels
 * Bugfix HDR
 * Installer
 
@@ -20,3 +20,4 @@ Battle.net — and in folders of your own
 * Automatic discovery, so a client finds this machine without being given an address
 * Optional UPnP forwarding of the streaming ports, for playing over the internet
 * The screen is put into the mode the client asked for while it streams, and back afterwards
+
