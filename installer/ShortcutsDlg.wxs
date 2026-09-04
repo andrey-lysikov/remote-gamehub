@@ -23,32 +23,37 @@
         <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
                  Transparent="yes" NoPrefix="yes" Text="Where to put [ProductName], and whether to start it." />
 
-        <Control Id="StartMenuCheckBox" Type="CheckBox" X="20" Y="70" Width="330" Height="17"
+        <Control Id="StartMenuCheckBox" Type="CheckBox" X="20" Y="55" Width="330" Height="15"
                  Property="INSTALLSTARTMENUSHORTCUT" CheckBoxValue="1"
                  Text="Add a shortcut to the Start menu" />
 
-        <Control Id="DesktopCheckBox" Type="CheckBox" X="20" Y="95" Width="330" Height="17"
+        <Control Id="DesktopCheckBox" Type="CheckBox" X="20" Y="71" Width="330" Height="15"
                  Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1"
                  Text="Add a shortcut to the desktop" />
 
         <!-- The same question the stock last page can ask, asked here instead: there the checkbox
              is drawn by a control of the set over the white of that page and comes out in a grey
              box of its own. Here it sits on the same ground as the two above it. -->
-        <Control Id="LaunchCheckBox" Type="CheckBox" X="20" Y="120" Width="330" Height="17"
+        <Control Id="LaunchCheckBox" Type="CheckBox" X="20" Y="87" Width="330" Height="15"
                  Property="LAUNCHAFTERINSTALL" CheckBoxValue="1"
                  Text="Start the server when the installer finishes" />
 
-        <!-- The one accessory, and the one line on this page that installs something beyond the
-             server. Shown only where there is a decision to make: a driver already installed and
-             running is not asked about, and is updated with everything else if it has moved on. -->
-        <Control Id="ViGEmCheckBox" Type="CheckBox" X="20" Y="145" Width="330" Height="17"
+        <!-- What presents the client's gamepads to games. Fetched by Prerequisites.ps1, not
+             carried in this package — see DRIVERSWITCH. -->
+        <Control Id="ViGEmCheckBox" Type="CheckBox" X="20" Y="103" Width="330" Height="15"
                  Property="INSTALLVIGEM" CheckBoxValue="1"
-                 HideCondition="VIGEMINSTALLED AND VIGEMSTART &lt;&gt; &quot;#4&quot;"
-                 Text="Install the ViGEmBus driver, which presents the client's gamepads to games" />
+                 Text="Install the ViGEmBus virtual controller driver" />
 
-        <Control Id="Note" Type="Text" X="20" Y="172" Width="330" Height="55" Transparent="yes"
+        <!-- Off by default, and this package never fetches the driver itself: checking this only
+             opens its own page, so the choice of installing it stays there, and turns on
+             [General] VirtualDisplay so the server looks for it once it is. -->
+        <Control Id="VddCheckBox" Type="CheckBox" X="20" Y="119" Width="330" Height="15"
+                 Property="INSTALLVDD" CheckBoxValue="1"
+                 Text="Open the virtual display driver's page, and use one once it is installed" />
+
+        <Control Id="Note" Type="Text" X="20" Y="137" Width="330" Height="62" Transparent="yes"
                  NoPrefix="yes"
-                 Text="The server lives in the notification area: it has no window of its own, and a shortcut is what starts it the first time. Its tray menu can make it start with Windows from then on. What the server needs and does not carry — the .NET runtime, and the driver above — is fetched when the installer finishes, and only if it is missing or out of date." />
+                 Text="The server lives in the notification area: it has no window of its own, and a shortcut is what starts it the first time. Its tray menu can make it start with Windows from then on. What the server needs and does not carry — the .NET runtime, and the driver above — is fetched or installed when the installer finishes, and only if it is missing or out of date." />
 
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 

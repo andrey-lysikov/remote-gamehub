@@ -21,8 +21,8 @@ internal sealed class GameWatcher : IDisposable
 
     // How long everything must stay quiet before the game counts as finished. Long while it is
     // young, because a launcher hands over seconds after its own process exits; short after that.
-    private static readonly TimeSpan QuietWhileYoung = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan QuietWhenSettled = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan QuietWhileYoung = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan QuietWhenSettled = TimeSpan.FromMilliseconds(600);
     private static readonly TimeSpan SettledAfter = TimeSpan.FromSeconds(30);
 
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);

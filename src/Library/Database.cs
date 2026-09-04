@@ -158,6 +158,16 @@ internal sealed class Database : IDisposable
             version = 8;
         }
 
+        if (version < 9)
+        {
+            // Whether the starting card is shown for this game while it loads. On by default,
+            // unlike the pointer above: it is the odd game that is confused by it, not the rule.
+            Execute(_connection, "ALTER TABLE games ADD COLUMN starting_card INTEGER NOT NULL DEFAULT 1;");
+
+            Execute(_connection, "PRAGMA user_version = 9;");
+            version = 9;
+        }
+
         Log.Info(from == version
             ? $"database {Path}, schema version {version}"
             : $"database {Path}, schema migrated from version {from} to {version}");

@@ -37,6 +37,15 @@ internal static unsafe class Kernel32
         string fileName, uint access, uint shareMode, nint security,
         uint creationDisposition, uint flags, nint template);
 
+    // Keeps the screen awake during a stream: network traffic is not "activity" to Windows' own
+    // idle timer, and a sleeping display stops composing, freezing the picture until input wakes it.
+    [DllImport("kernel32.dll")]
+    internal static extern uint SetThreadExecutionState(uint flags);
+
+    internal const uint ES_CONTINUOUS = 0x80000000;
+    internal const uint ES_SYSTEM_REQUIRED = 0x00000001;
+    internal const uint ES_DISPLAY_REQUIRED = 0x00000002;
+
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DeviceIoControl(

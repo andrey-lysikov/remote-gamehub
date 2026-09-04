@@ -77,8 +77,7 @@ internal static unsafe class Wasapi
     internal const ushort WAVE_FORMAT_EXTENSIBLE = 0xFFFE;
 
     // ksmedia.h speaker masks, for the two channel counts Moonlight ever asks for above stereo:
-    // front left/right/centre, LFE, back left/right is what the client itself means by 6 — its own
-    // report already carries this same number — and adding the sides is what 7.1 is over that.
+    // front L/R/centre, LFE, back L/R for 6; adding the sides is what 7.1 is over that.
     internal const uint KSAUDIO_SPEAKER_5POINT1 = 0x3F;
     internal const uint KSAUDIO_SPEAKER_7POINT1_SURROUND = 0x63F;
 
@@ -87,9 +86,8 @@ internal static unsafe class Wasapi
         new("A45C254E-DF1C-4EFD-8020-67D146A850E0");
     internal const uint PKEY_Device_FriendlyName_Id = 14;
 
-    // mmdeviceapi.h: the shared-mode format every WASAPI client — this server's loopback capture
-    // included — gets handed, whatever an application asks for. Writable: this is the same value
-    // the Sound control panel's "Default Format" changes, by the same means.
+    // mmdeviceapi.h: the shared-mode format every WASAPI client gets handed. Writable — the same
+    // value the Sound control panel's "Default Format" changes, by the same means.
     internal static readonly Guid PKEY_AudioEngine_DeviceFormat_Format =
         new("F19F064D-082C-4E27-BC73-6882A1BB8E4C");
     internal const uint PKEY_AudioEngine_DeviceFormat_Id = 0;
@@ -308,12 +306,8 @@ internal static unsafe class Wasapi
         }
     }
 
-    // PolicyConfig.h slot 6: SetDeviceFormat(PCWSTR deviceId, WAVEFORMATEX* endpoint, WAVEFORMATEX*
-    // mix). The one call that really reconfigures the engine, not just what a property says about
-    // it: writing PKEY_AudioEngine_DeviceFormat by hand through the property store left every
-    // client that opened the device afterwards refused with AUDCLNT_E_UNSUPPORTED_FORMAT — the
-    // property changed, the engine underneath it did not. Both formats are the one asked for: this
-    // server never touches exclusive mode, and the Sound control panel sets them the same way.
+    // PolicyConfig.h slot 6. Writing PKEY_AudioEngine_DeviceFormat through the property store
+    // alone left clients refused with AUDCLNT_E_UNSUPPORTED_FORMAT; this call actually reconfigures.
     internal static int SetDeviceFormat(void* policy, string deviceId, byte[] format)
     {
         fixed (char* id = deviceId)

@@ -37,6 +37,14 @@ internal enum GamepadButtons : ushort
           LeftShoulder | RightShoulder | Guide | A | B | X | Y,
 }
 
+// What kind of pad the client says is behind a controller slot (Input.h's LI_CTYPE_*, read in
+// ClientInput.ControllerArrived) — which decides which shape GamepadHub presents it as.
+internal enum GamepadKind
+{
+    Xbox,
+    PlayStation,
+}
+
 // One controller, at one moment. Sticks are the full signed range and triggers are a byte, which
 // is what arrives from the client and what the pad reports — no scaling happens anywhere between.
 internal readonly record struct GamepadState(
@@ -60,6 +68,75 @@ internal readonly record struct GamepadState(
         ThumbRX = RightStickX,
         ThumbRY = RightStickY,
     };
+
+    // DS4_BUTTONS from ViGEm/Common.h, verified against the real header. The D-pad is not among
+    // them — DS4_REPORT packs it as an eight-way hat in wButtons' own low nibble, not as bits.
+    private const ushort Ds4Square = 1 << 4;
+    private const ushort Ds4Cross = 1 << 5;
+    private const ushort Ds4Circle = 1 << 6;
+    private const ushort Ds4Triangle = 1 << 7;
+    private const ushort Ds4ShoulderLeft = 1 << 8;
+    private const ushort Ds4ShoulderRight = 1 << 9;
+    private const ushort Ds4Share = 1 << 12;
+    private const ushort Ds4Options = 1 << 13;
+    private const ushort Ds4ThumbLeft = 1 << 14;
+    private const ushort Ds4ThumbRight = 1 << 15;
+
+    // DS4_BUTTON_DPAD_NONE = 0x8; the seven other nibble values are the compass points clockwise
+    // from north.
+    private const byte Ds4DpadNone = 0x8;
+
+    internal ViGEmBus.Ds4Report ToDs4Report()
+    {
+        var buttons = Dpad();
+
+        if (Buttons.HasFlag(GamepadButtons.X)) buttons |= Ds4Square;
+        if (Buttons.HasFlag(GamepadButtons.A)) buttons |= Ds4Cross;
+        if (Buttons.HasFlag(GamepadButtons.B)) buttons |= Ds4Circle;
+        if (Buttons.HasFlag(GamepadButtons.Y)) buttons |= Ds4Triangle;
+        if (Buttons.HasFlag(GamepadButtons.LeftShoulder)) buttons |= Ds4ShoulderLeft;
+        if (Buttons.HasFlag(GamepadButtons.RightShoulder)) buttons |= Ds4ShoulderRight;
+        if (Buttons.HasFlag(GamepadButtons.Back)) buttons |= Ds4Share;
+        if (Buttons.HasFlag(GamepadButtons.Start)) buttons |= Ds4Options;
+        if (Buttons.HasFlag(GamepadButtons.LeftStick)) buttons |= Ds4ThumbLeft;
+        if (Buttons.HasFlag(GamepadButtons.RightStick)) buttons |= Ds4ThumbRight;
+
+        return new ViGEmBus.Ds4Report
+        {
+            ThumbLX = ToAxisByte(LeftStickX),
+            ThumbLY = (byte)(0xFF - ToAxisByte(LeftStickY)),
+            ThumbRX = ToAxisByte(RightStickX),
+            ThumbRY = (byte)(0xFF - ToAxisByte(RightStickY)),
+            Buttons = buttons,
+            TriggerL = LeftTrigger,
+            TriggerR = RightTrigger,
+        };
+    }
+
+    private ushort Dpad()
+    {
+        var up = Buttons.HasFlag(GamepadButtons.DpadUp);
+        var down = Buttons.HasFlag(GamepadButtons.DpadDown);
+        var left = Buttons.HasFlag(GamepadButtons.DpadLeft);
+        var right = Buttons.HasFlag(GamepadButtons.DpadRight);
+
+        return (up, down, left, right) switch
+        {
+            (true, false, false, false) => 0,
+            (true, false, false, true) => 1,
+            (false, false, false, true) => 2,
+            (false, true, false, true) => 3,
+            (false, true, false, false) => 4,
+            (false, true, true, false) => 5,
+            (false, false, true, false) => 6,
+            (true, false, true, false) => 7,
+            _ => Ds4DpadNone,
+        };
+    }
+
+    // XInput's signed -32768..32767, centred on 0, becomes DS4's unsigned 0..255, centred on
+    // 0x80: exactly the top byte of the range shifted up by half.
+    private static byte ToAxisByte(short value) => (byte)((value + 32768) >> 8);
 }
 
 // What the game asked a controller to do: rumble, and which player light to show.

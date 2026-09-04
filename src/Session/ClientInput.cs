@@ -86,10 +86,10 @@ internal sealed class ClientInput
     // sizeof(InputRecord), which the struct's explicit layout fixes at forty bytes on x64.
     private const int RecordBytes = 40;
 
-    internal ClientInput(AppConfig config, Rect capturedScreen, GamepadHub gamepads)
+    internal ClientInput(Rect capturedScreen, GamepadHub gamepads)
     {
-        _keyboard = config.Keyboard;
-        _mouse = config.Mouse;
+        _keyboard = AppParameters.Input.Keyboard;
+        _mouse = AppParameters.Input.Mouse;
         // Not a setting: a controller bus that is installed is one somebody installed on purpose.
         _gamepad = gamepads.IsAvailable;
         _screen = capturedScreen;
@@ -386,10 +386,19 @@ internal sealed class ClientInput
         var (virtualLeft, virtualTop, virtualWidth, virtualHeight) = VirtualDesktop();
         if (virtualWidth <= 1 || virtualHeight <= 1) return;
 
+        SendAbsolute(onScreenX, onScreenY, virtualLeft, virtualTop, virtualWidth, virtualHeight);
+
+        ReportMapping(x, y, referenceWidth, referenceHeight, onScreenX, onScreenY,
+                      virtualLeft, virtualTop, virtualWidth, virtualHeight);
+    }
+
+    private void SendAbsolute(double x, double y, int virtualLeft, int virtualTop,
+                              int virtualWidth, int virtualHeight)
+    {
         // The normalised space has 65536 positions covering the desktop's width, so the last
         // pixel is 65535 and the divisor is one less than the width.
-        var normalisedX = (onScreenX - virtualLeft) * 65535.0 / (virtualWidth - 1);
-        var normalisedY = (onScreenY - virtualTop) * 65535.0 / (virtualHeight - 1);
+        var normalisedX = (x - virtualLeft) * 65535.0 / (virtualWidth - 1);
+        var normalisedY = (y - virtualTop) * 65535.0 / (virtualHeight - 1);
 
         Send(new InputRecord
         {
@@ -399,9 +408,6 @@ internal sealed class ClientInput
             MouseFlags = User32.MOUSEEVENTF_MOVE | User32.MOUSEEVENTF_ABSOLUTE |
                          User32.MOUSEEVENTF_VIRTUALDESK,
         });
-
-        ReportMapping(x, y, referenceWidth, referenceHeight, onScreenX, onScreenY,
-                      virtualLeft, virtualTop, virtualWidth, virtualHeight);
     }
 
     // The shape the last mapping report was written for. One line is written whenever any of the
@@ -449,6 +455,8 @@ internal sealed class ClientInput
         return (_desktopLeft, _desktopTop, _desktopWidth, _desktopHeight);
     }
 
+    // Genuinely relative and unbounded: a game's camera look must keep turning past a screen
+    // edge, which a clamped absolute move (tried once) capped at the edge instead.
     private void MoveRelative(ReadOnlySpan<byte> body)
     {
         if (!_mouse || body.Length < 4) return;
@@ -547,8 +555,8 @@ internal sealed class ClientInput
             RightStickY: BinaryPrimitives.ReadInt16LittleEndian(body[18..])));
     }
 
-    // The client describing a controller it has, sent once when the pad appears, before any state.
-    // Only logged: every controller is presented to this machine as a wired Xbox 360.
+    // Sent once when the pad appears, before any state — so the kind recorded here is always
+    // set by the time GamepadHub.Update plugs it in.
     private void ControllerArrived(ReadOnlySpan<byte> body)
     {
         if (!_gamepad || body.Length < 8) return;
@@ -556,6 +564,9 @@ internal sealed class ClientInput
         var number = body[0];
         var type = body[1];
         var capabilities = BinaryPrimitives.ReadUInt16LittleEndian(body[2..]);
+
+        var isPlayStation = type == 2;
+        _gamepads.SetKind(number, isPlayStation ? GamepadKind.PlayStation : GamepadKind.Xbox);
 
         var kind = type switch
         {
@@ -578,7 +589,9 @@ internal sealed class ClientInput
 
         Log.Info($"controller {number} is {kind}" +
                  (can.Count > 0 ? $" with {string.Join(", ", can)}" : " with nothing it reports") +
-                 ". It is presented to this machine as a wired Xbox 360 pad.");
+                 (isPlayStation
+                     ? ". It is presented to this machine as a DualShock 4 or DualSense pad."
+                     : ". It is presented to this machine as a wired Xbox pad."));
     }
 
     // ------------------------------------------------------------------ delivery

@@ -105,10 +105,14 @@ internal sealed class AudioStream : IDisposable
         _socket = VideoStream.UdpBind(_port, _bindAddress);
         _running = true;
 
-        _pings = new Thread(PingLoop) { IsBackground = true, Name = "audio-ping" };
+        // Same priority as the "stream" thread (see StreamSession.Start): audio sharing a core
+        // with it at only Normal would be the one this server itself starves to fix video.
+        _pings = new Thread(PingLoop)
+            { IsBackground = true, Name = "audio-ping", Priority = ThreadPriority.Highest };
         _pings.Start();
 
-        _capture = new Thread(CaptureLoop) { IsBackground = true, Name = "audio" };
+        _capture = new Thread(CaptureLoop)
+            { IsBackground = true, Name = "audio", Priority = ThreadPriority.Highest };
         _capture.Start();
 
         Log.Info($"audio stream ready on port {_port}: {_channels} channel(s) at " +
@@ -160,16 +164,19 @@ internal sealed class AudioStream : IDisposable
 
         try
         {
-            var mapping = _channels == 6
-                // 5.1 as the client decodes it: front left and right, centre, low frequency,
-                // then the two rear — the order Windows uses, so no shuffling is needed.
-                ? new byte[] { 0, 1, 2, 3, 4, 5 }
-                : new byte[] { 0, 1 };
+            // 5.1/7.1 as the client decodes them: front L/R, centre, LFE, rear L/R, then (7.1)
+            // the two side channels — the order Windows already uses, so nothing is shuffled.
+            var mapping = _channels switch
+            {
+                8 => new byte[] { 0, 1, 2, 3, 4, 5, 6, 7 },
+                6 => new byte[] { 0, 1, 2, 3, 4, 5 },
+                _ => new byte[] { 0, 1 },
+            };
 
-            // The shape DESCRIBE advertised and the client decodes in: 5.1 is four streams with
-            // two coupled pairs, six with none at high quality; stereo one pair. Wrong is noise.
-            var streams = _channels == 6 ? (_highQuality ? 6 : 4) : 1;
-            var coupled = _channels == 6 ? (_highQuality ? 0 : 2) : 1;
+            // The shape DESCRIBE advertised and the client decodes in — 5.1: 4 streams/2 coupled
+            // normal, 6/0 high; 7.1: 5/3 normal, 8/0 high; stereo: 1/1. Wrong here is noise.
+            var streams = _channels switch { 8 => _highQuality ? 8 : 5, 6 => _highQuality ? 6 : 4, _ => 1 };
+            var coupled = _channels switch { 8 => _highQuality ? 0 : 3, 6 => _highQuality ? 0 : 2, _ => 1 };
 
             var encoder = OpusMSEncoder.Create(SampleRate, _channels, streams, coupled, mapping,
                 OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY);
@@ -616,7 +623,12 @@ internal sealed class AudioStream : IDisposable
                 AverageBytesPerSecond = (uint)(SampleRate * channels * 2),
                 ExtraSize = 22,
                 ValidBitsPerSample = 16,
-                ChannelMask = channelMask != 0 ? channelMask : (channels == 6 ? 0x3Fu : 0x3u),
+                ChannelMask = channelMask != 0 ? channelMask : channels switch
+                {
+                    8 => Wasapi.KSAUDIO_SPEAKER_7POINT1_SURROUND,
+                    6 => Wasapi.KSAUDIO_SPEAKER_5POINT1,
+                    _ => 0x3u,
+                },
                 SubFormat = Wasapi.KSDATAFORMAT_SUBTYPE_PCM,
             };
 

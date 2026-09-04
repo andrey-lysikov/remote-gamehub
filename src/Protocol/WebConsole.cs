@@ -268,6 +268,13 @@ internal sealed class WebConsole : IAsyncDisposable
             return;
         }
 
+        if (request.Query("stop") == "1")
+        {
+            _sessions.Cancel();
+            await WriteAsync(stream, 200, "text/plain", "Stopped.");
+            return;
+        }
+
         if (request.Query("remove") is { } removeId && long.TryParse(removeId, out var toRemove))
         {
             _games.Remove(toRemove);
@@ -292,6 +299,7 @@ internal sealed class WebConsole : IAsyncDisposable
             // added: the pointer switch belongs to that row and is written straight after.
             var saved = _games.Save(toSave, title, command, folder);
             _games.RecordPointer(saved, request.Query("pointer") == "1");
+            _games.RecordShowCard(saved, request.Query("card") != "0");
 
             if (int.TryParse(request.Query("quality"), out var level) &&
                 Enum.IsDefined(typeof(StreamQuality), level))
@@ -393,7 +401,12 @@ internal sealed class WebConsole : IAsyncDisposable
                         $"data-command=\"{Escape(game.LaunchCommand)}\" " +
                         $"data-folder=\"{Escape(game.InstallPath ?? string.Empty)}\" " +
                         $"data-pointer={(game.Pointer ? 1 : 0)} " +
-                        $"data-quality={(int)game.Quality}>");
+                        $"data-quality={(int)game.Quality} " +
+                        $"data-card={(game.ShowCard ? 1 : 0)}>");
+
+            // A container of its own, so the overlays below position against the poster alone,
+            // not against the whole tile — taller by the title and source line under it.
+            html.Append("<div class=poster>");
 
             // The stamp is not read by the server: it is there so that a cover just replaced is
             // fetched again instead of being taken from the browser's cache under the same address.
@@ -401,16 +414,20 @@ internal sealed class WebConsole : IAsyncDisposable
                 ? $"<img class=art src=\"/?cover={game.Id}&amp;v={game.ArtStamp}\" alt=\"\" loading=lazy>"
                 : "<div class=\"art none\"><span>no cover</span></div>");
 
-            // The one thing on this page that changes without anybody pressing anything, so it is
-            // marked on the poster rather than written under it. Always in the markup, whichever
-            // tile it belongs to for now: the poll that follows the running one toggles the class
-            // on the article, and CSS alone decides whether the badge inside it is seen.
+            // Always in the markup; the poll that follows the running one toggles the article's
+            // class, and CSS alone decides whether this badge is seen.
             html.Append("<span class=running>Running</span>");
+
+            // Centred on the poster rather than among the small tools below: stopping the one
+            // game that is running is the one action here worth not having to aim for.
+            html.Append($"<button data-do=stop title=\"Stop\" class=stop>{StopIcon}</button>");
 
             html.Append("<div class=tools>" +
                         $"<button data-do=edit title=\"Edit\">{PencilIcon}</button>" +
                         $"<button data-do=remove title=\"Remove\" class=danger>{TrashIcon}</button>" +
                         "</div>");
+
+            html.Append("</div>");
 
             html.Append($"<h3>{Escape(game.Title)}</h3>");
             // Where the game came from, and whether anybody has touched it since: "xbox (changed)"
@@ -468,13 +485,13 @@ internal sealed class WebConsole : IAsyncDisposable
         body.Append(Style);
         // The header is the icon beside two lines: the name, the version and the project's
         // address, and under them what the server is doing now. The icon is as tall as both.
-        body.Append("<header><img id=mark src=\"/?icon=1\" alt=\"\"><div><h1>" +
+        body.Append("<header><img id=mark src=\"/?icon=1\" alt=\"\"><div><div class=titlerow><h1>" +
                     $"{AppParameters.Identity.DisplayName} <span class=v>v{Program.Version}</span>" +
-                    "<span class=meta id=host>");
+                    "</h1><span class=meta id=host>");
         body.Append(HostLine());
-        body.Append("</span><span class=meta>" +
+        body.Append("</span><span class=\"meta gh\">" +
                     $"<a href=\"{AppParameters.Links.Project}\" target=_blank rel=noopener>GitHub</a>" +
-                    "</span></h1><p id=status>");
+                    "</span></div><p id=status>");
         body.Append(Status());
         body.Append("</p></div></header>");
 
@@ -520,10 +537,17 @@ internal sealed class WebConsole : IAsyncDisposable
                     "own files beside it</span>" +
                     "<input id=folder placeholder=\"C:\\Games\\Something\"></label>" +
 
-                    // Off for almost every game, which draws its own; on for the ones that draw
-                    // none and expect the mouse to be where Windows says it is.
-                    "<label class=switch><input type=checkbox id=pointer>" +
-                    "<span>Enable software mouse cursor</span></label>" +
+                    // On for the few games that draw no pointer of their own; not offered at all
+                    // once the virtual cursor is off in the configuration file.
+                    (_config.VirtualMouse
+                        ? "<label class=switch><input type=checkbox id=pointer>" +
+                          "<span>Enable software mouse cursor</span></label>"
+                        : string.Empty) +
+
+                    // On by default, unlike the pointer above. Named startcard: the pairing
+                    // section below already claims the id "card" for itself.
+                    "<label class=switch><input type=checkbox id=startcard checked>" +
+                    "<span>Show splash screen when game is starting</span></label>" +
 
                     // A fast game wants the encoder to finish early; a quiet one can afford the
                     // time. A client from outside this network is given one level less than this.
@@ -613,7 +637,7 @@ internal sealed class WebConsole : IAsyncDisposable
 
         // What the card can encode. Whether a stream really goes out in it depends on the screen
         // being in HDR at the time, which only a running stream knows; the log has the reasons.
-        var hdr = _encoder.Hdr ? "HDR" : "no HDR";
+        var hdr = _encoder.AnyHdr ? "HDR" : "no HDR";
 
         var machine = new List<string>
         {
@@ -624,13 +648,13 @@ internal sealed class WebConsole : IAsyncDisposable
             // Which controller bus is presenting the pads, or that there is none: a client whose
             // controller does nothing has one question, and this is its answer.
             _gamepads.IsAvailable
-                ? $"{Escape(_gamepads.Driver)} online"
+                ? $"{Escape(_gamepads.Driver)} enabled"
                 : "no controller bus",
             $"{_clients.Count()} paired",
             $"up {Escape(Describe(uptime))}",
         };
 
-        if (_config.Upnp) machine.Add("<b class=warn>forwarded</b>");
+        machine.Add(_config.Upnp ? "<b class=warn>uPnP enabled</b>" : "uPnP disabled");
 
         // A newer release, when the daily check has found one. Last on this line, because it is
         // news about the server rather than about the machine.
@@ -755,8 +779,8 @@ internal sealed class WebConsole : IAsyncDisposable
     // A string as a JSON literal, quotes included.
     private static string JsonText(string text) => System.Text.Json.JsonSerializer.Serialize(text);
 
-    // The three marks on the tiles, drawn rather than written: a glyph from a font would be a
-    // different shape on every machine, and a pencil and a bin need no language.
+    // The marks on the tiles, drawn rather than written: a glyph from a font would be a
+    // different shape on every machine, and none of these need a language.
     private const string PencilIcon =
         "<svg viewBox=\"0 0 24 24\" aria-hidden=true><path d=\"M4 20h4L19 9l-4-4L4 16v4z\"/>" +
         "<path d=\"M14 6l4 4\"/></svg>";
@@ -764,6 +788,9 @@ internal sealed class WebConsole : IAsyncDisposable
     private const string TrashIcon =
         "<svg viewBox=\"0 0 24 24\" aria-hidden=true><path d=\"M5 7h14M10 7V5h4v2M6 7l1 13h10l1-13\"/>" +
         "<path d=\"M10 11v6M14 11v6\"/></svg>";
+
+    private const string StopIcon =
+        "<svg viewBox=\"0 0 24 24\" aria-hidden=true><rect x=6 y=6 width=12 height=12 rx=2/></svg>";
 
     private const string PlusIcon =
         "<svg viewBox=\"0 0 24 24\" class=big aria-hidden=true><path d=\"M12 5v14M5 12h14\"/></svg>";
@@ -780,7 +807,7 @@ internal sealed class WebConsole : IAsyncDisposable
         "--danger-line:#d99;--danger-bg:#fbe9e9;--live:#2a7f3f;--warn:#b8620a;--green-line:#7fb98a;" +
         "--update-hover:#e6f4e9;--log-bg:#fafafa;--log-ink:#333;--none-ink:#9a9a9a;" +
         "--pin-field:#fff;--pin-line:#b0b0b0;--pin-ink:#111;--backdrop:rgba(0,0,0,.35);" +
-        "--add-line:#cfcfcf;--add-hover-line:#a8a8a8;--add-hover-ink:#333;--meta-link:#6a6a6a}" +
+        "--add-hover-ink:#333;--meta-link:#6a6a6a}" +
         // Dark: the palette the page was first drawn in.
         ":root[data-theme=dark]{color-scheme:dark;--bg:#101010;--panel:#161616;--line:#262626;" +
         "--ink:#ddd;--dim:#8a8a8a;--faint:#666;--fainter:#444;--field:#111;--field-line:#3a3a3a;" +
@@ -789,7 +816,7 @@ internal sealed class WebConsole : IAsyncDisposable
         "--danger-line:#844;--danger-bg:#2a1a1a;--live:#7c6;--warn:#d95;--green-line:#3a5;" +
         "--update-hover:#1a2a1e;--log-bg:#0c0c0c;--log-ink:#bbb;--none-ink:#555;" +
         "--pin-field:#222;--pin-line:#555;--pin-ink:#eee;--backdrop:rgba(0,0,0,.6);" +
-        "--add-line:#333;--add-hover-line:#4a4a4a;--add-hover-ink:#aaa;--meta-link:#888}" +
+        "--add-hover-ink:#aaa;--meta-link:#888}" +
         "*{box-sizing:border-box}" +
         "body{font:15px/1.5 system-ui,sans-serif;margin:0 auto;padding:1.25rem 1.25rem 4rem;" +
         // Wide enough for five posters and their gaps, and no wider: past that the grid keeps
@@ -811,9 +838,12 @@ internal sealed class WebConsole : IAsyncDisposable
         ".meta a:hover{color:var(--ink);text-decoration:underline}" +
         "#status{margin:.35rem 0 0;color:var(--dim);font-size:13px;" +
         "white-space:nowrap;overflow:auto;scrollbar-width:none}" +
-        // The machine's own facts, on the heading's line: the same small grey as the link beside
-        // them, and allowed to scroll rather than to push the link off the end.
-        "#host{overflow:auto;scrollbar-width:none;white-space:nowrap}" +
+        // Title, host facts and the GitHub link on one row; the facts between the two fixed ends
+        // give way, scrolling rather than wrapping the link onto a line of its own.
+        ".titlerow{display:flex;align-items:baseline;min-width:0}" +
+        ".titlerow h1{flex:none}" +
+        "#host{flex:1;min-width:0;overflow:auto;scrollbar-width:none;white-space:nowrap}" +
+        ".titlerow .gh{flex:none}" +
         "#status b{color:var(--ink);font-weight:600}" +
         "#status b.live{color:var(--live)}" +
         "#status b.warn{color:var(--warn)}" +
@@ -828,10 +858,13 @@ internal sealed class WebConsole : IAsyncDisposable
         // six columns at an ordinary window and on two on a telephone.
         "#gamestools{align-items:center;margin:0 0 .6rem}" +
         "#games{display:grid;gap:1.25rem;grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}" +
-        ".game{position:relative;background:none;border:0;padding:0;color:inherit;text-align:left;" +
-        "font:inherit}" +
-        ".art{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:.5rem;display:block;" +
-        "background:var(--panel);border:1px solid var(--line)}" +
+        ".game{background:none;border:0;padding:0;color:inherit;text-align:left;font:inherit}" +
+        // Positions everything pinned to the poster (the tools, the stop button, the running
+        // badge) against the image alone, not against the title and source line under it too.
+        ".poster{position:relative}" +
+        // 3:4, matching the shape CoverArt.ToPng pads every cover to. No border or rounding: the
+        // poster is the tile, not a picture framed inside one.
+        ".art{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:transparent}" +
         ".art.none{display:grid;place-items:center;color:var(--none-ink);font-size:11px}" +
         ".game h3{font-size:13px;margin:.5rem 0 0;font-weight:500;line-height:1.3;" +
         "overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}" +
@@ -843,12 +876,10 @@ internal sealed class WebConsole : IAsyncDisposable
         "transition:opacity .12s}" +
         ".game:hover .tools,.game:focus-within .tools{opacity:1}" +
         "@media (hover:none){.tools{opacity:1}}" +
-        // The one mark that is not an action: it says what the machine is doing, so it sits in the
-        // opposite corner from the tools. Present in every tile and shown only on the running
-        // one, so the poll that keeps it current has a class to toggle rather than a node to add.
-        // Qualified with the tag on both sides: the article carrying the state is also called
-        // "running", and a bare .running here hid the whole tile along with the badge inside it.
-        "span.running{display:none;position:absolute;right:.4rem;bottom:3.6rem;padding:.22rem .55rem;" +
+        // Present in every tile, shown only on the running one via a class the poll toggles.
+        // Qualified with the tag: a bare .running also matched the article and hid the tile.
+        "span.running{display:none;position:absolute;right:.4rem;bottom:.4rem;" +
+        "padding:.22rem .55rem;" +
         "border-radius:.4rem;font-size:15px;font-weight:600;letter-spacing:.02em;" +
         "background:var(--live);color:var(--bg);box-shadow:0 1px 4px rgba(0,0,0,.35)}" +
         ".game.running span.running{display:inline-block}" +
@@ -856,14 +887,30 @@ internal sealed class WebConsole : IAsyncDisposable
         "background:var(--glass);border:1px solid var(--button-line);backdrop-filter:blur(4px)}" +
         ".tools button:hover{background:var(--button-hover);border-color:var(--button-line-hover)}" +
         ".tools .danger:hover{border-color:var(--danger-line);background:var(--danger-bg)}" +
+        // Centred on the poster and about three times the size of the small tools. Grey glass at
+        // rest, like them, and only turns to danger red on approach.
+        ".stop{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);" +
+        "width:3.6rem;height:3.6rem;align-items:center;justify-content:center;padding:0;" +
+        "border-radius:50%;border:1px solid var(--button-line);background:var(--glass);" +
+        "color:var(--ink);backdrop-filter:blur(4px);opacity:0;" +
+        "transition:opacity .12s,background .12s,border-color .12s,color .12s}" +
+        // Filled, unlike the other outline icons — the inherited stroke of the same colour is
+        // turned off here, or it blurs into the fill instead of reading as a crisp square.
+        ".stop svg{width:28px;height:28px;fill:currentColor;stroke:none}" +
+        ".game.running .stop{display:flex}" +
+        ".game:hover .stop,.game:focus-within .stop{opacity:1}" +
+        "@media (hover:none){.game.running .stop{opacity:1}}" +
+        ".stop:hover{background:var(--danger-bg);border-color:var(--danger-line);" +
+        "color:var(--danger-line)}" +
         "svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;" +
         "stroke-linecap:round;stroke-linejoin:round;display:block}" +
         "svg.big{width:30px;height:30px;stroke-width:1.5}" +
 
-        // The tile that adds one, shaped like the posters it sits among.
+        // The tile that adds one, shaped like the posters it sits among but with nothing framing
+        // it: no border, no background, on the same bare ground as everything else on the page.
         ".game.add{display:grid;place-content:center;gap:.4rem;justify-items:center;" +
-        "aspect-ratio:2/3;border:1px dashed var(--add-line);border-radius:.5rem;color:var(--faint);cursor:pointer}" +
-        ".game.add:hover{border-color:var(--add-hover-line);color:var(--add-hover-ink);background:var(--panel)}" +
+        "aspect-ratio:3/4;border:0;background:none;color:var(--faint);cursor:pointer}" +
+        ".game.add:hover{color:var(--add-hover-ink)}" +
         ".game.add span{font-size:12px}" +
 
         // The paired devices: rows rather than tiles, because a device is a name and two dates
@@ -1033,11 +1080,12 @@ internal sealed class WebConsole : IAsyncDisposable
         "scansaid.textContent=await (await fetch('/?rescan=1')).text();" +
         "setTimeout(reload,2000);" +
         "setTimeout(()=>{reload();scansaid.textContent='';b.disabled=false;},6000);});" +
-        "function open(id,name,starts,from,pointerOn,level){editing=id;" +
+        "function open(id,name,starts,from,pointerOn,level,cardOn){editing=id;" +
         "$('editortitle').textContent=id?'Edit game':'Add a game';" +
         "title.value=name||'';command.value=starts||'';folder.value=from||'';" +
         "quality.value=level===undefined?2:level;" +
-        "pointer.checked=pointerOn==='1';" +
+        "if(window.pointer)pointer.checked=pointerOn==='1';" +
+        "startcard.checked=cardOn!=='0';" +
         "editorsaid.textContent='';" +
         // A game that does not exist yet has nowhere to put a cover, so that half of the window is
         // shown only once there is a row to attach one to.
@@ -1051,7 +1099,8 @@ internal sealed class WebConsole : IAsyncDisposable
         "const r=await fetch('/?save='+editing+'&title='+encodeURIComponent(title.value)+" +
         "'&command='+encodeURIComponent(command.value)+" +
         "'&folder='+encodeURIComponent(folder.value)+" +
-        "'&pointer='+(pointer.checked?1:0)+'&quality='+quality.value);" +
+        "'&pointer='+(window.pointer&&pointer.checked?1:0)+'&quality='+quality.value+" +
+        "'&card='+(startcard.checked?1:0));" +
         "editorsaid.textContent=await r.text();await reload();editor.close();});" +
         // --- the cover picker ---
         // Searched at once for the editor's name; a portrait that does not exist falls back once.
@@ -1109,10 +1158,13 @@ internal sealed class WebConsole : IAsyncDisposable
         "const button=e.target.closest('button[data-do]');if(!button)return;" +
         "const tile=button.closest('.game');" +
         "if(button.dataset.do==='edit'){open(tile.dataset.id,tile.dataset.title,tile.dataset.command," +
-        "tile.dataset.folder,tile.dataset.pointer,tile.dataset.quality);return;}" +
+        "tile.dataset.folder,tile.dataset.pointer,tile.dataset.quality,tile.dataset.card);return;}" +
         "if(button.dataset.do==='remove'){" +
         "if(!confirm('Remove '+tile.dataset.title+' from the list?'))return;" +
-        "await fetch('/?remove='+tile.dataset.id);await reload();}});" +
+        "await fetch('/?remove='+tile.dataset.id);await reload();return;}" +
+        "if(button.dataset.do==='stop'){" +
+        "if(!confirm('Stop '+tile.dataset.title+'?'))return;" +
+        "await fetch('/?stop=1');await reload();}});" +
 
         // The paired devices, the same way. Forgetting one is asked about first: it is the one
         // thing here that somebody else has to undo, by pairing their device again.

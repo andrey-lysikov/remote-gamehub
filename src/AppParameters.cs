@@ -42,6 +42,11 @@ internal static class AppParameters
 
         // The same release as a page — what the notification and the page open.
         internal const string LatestRelease = Project + "/releases/latest";
+
+        // A third-party project, not ours: this server never fetches or installs it, only points
+        // the installer's own checkbox at it and looks for it once it is on the machine.
+        internal const string VirtualDisplayDriver =
+            "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases";
     }
 
     // Where the covers come from. Two catalogues, because neither knows everything: Steam's own
@@ -132,6 +137,7 @@ internal static class AppParameters
         internal const int CodecHevc = 0x0100;
         internal const int CodecHevcMain10 = 0x0200;
         internal const int CodecAv1Main8 = 0x0001_0000;
+        internal const int CodecAv1Main10 = 0x0002_0000;
         internal const int CodecH264High8_444 = 0x0004_0000;
         internal const int CodecHevcRext8_444 = 0x0008_0000;
 
@@ -172,6 +178,22 @@ internal static class AppParameters
         // pointed at a drive root would turn the scan into a disk crawl.
         internal const int MinGamesFolderDepth = 1;
         internal const int MaxGamesFolderDepth = 8;
+    }
+
+    // Never a setting: a client that asks for sound gets it. Left here rather than dropped, so a
+    // machine that genuinely has none is one line to build with rather than a feature to write.
+    internal static class Audio
+    {
+        internal const bool Enabled = true;
+        internal const string Device = "auto";
+    }
+
+    // Never a setting either: a controller works or does not depending on whether ViGEmBus is
+    // installed, which is the one input switch this server actually exposes — see GamepadHub.
+    internal static class Input
+    {
+        internal const bool Keyboard = true;
+        internal const bool Mouse = true;
     }
 
     internal static class Capture

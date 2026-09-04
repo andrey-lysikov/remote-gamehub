@@ -86,7 +86,16 @@ internal static class Preflight
         var inventory = DisplayInventory.Enumerate();
         Log.Info(DisplayInventory.Describe(inventory));
 
-        var output = DisplayInventory.Select(inventory, config.Output, out var reason);
+        if (config.VirtualDisplay && !DisplayInventory.HasVirtualDisplay(inventory))
+        {
+            Log.Info(
+                "[General] VirtualDisplay is on, but no virtual display driver was found on this " +
+                "machine;\n    this stream uses an ordinary screen, as if the setting were off.\n" +
+                $"    What to do: install one from {AppParameters.Links.VirtualDisplayDriver}");
+        }
+
+        var output = DisplayInventory.Select(inventory, config.Output, config.VirtualDisplay,
+            out var reason);
         if (output is null)
         {
             return Stop(
@@ -167,11 +176,19 @@ internal static class Preflight
         }
     }
 
-    // The first run writes the file so that every setting is visible and documented. It is also
-    // the run worth logging in full, so Debug is recorded as absent and written back as false.
+    // The first run writes the file so every setting is documented; an upgrade that added some
+    // does the same, so an older file gains them at their defaults instead of running without.
     private static void WriteConfigurationIfNeeded(AppConfig config)
     {
-        if (!config.IsFirstRun && !config.DebugWasAbsent) return;
+        if (!config.IsFirstRun && !config.DebugWasAbsent && config.AddedSettings.Count == 0) return;
+
+        if (config.AddedSettings.Count > 0)
+        {
+            Log.Event($"{config.AddedSettings.Count} new setting(s), added to this server since " +
+                      "the configuration file was last written, are added to it now at their " +
+                      "defaults:\n" +
+                      string.Join("\n", config.AddedSettings.Select(s => $"    [{s.Section}] {s.Key}")));
+        }
 
         var written = config.SaveSomewhere();
         if (written is not null)

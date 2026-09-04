@@ -39,6 +39,11 @@ internal sealed record GraphicsAdapter(
     internal bool LooksDiscrete => !IsSoftware && DedicatedVideoMemory >= 512L * 1024 * 1024;
 
     internal string Vendor => Dxgi.DescribeVendor(VendorId);
+
+    // The adapter description is the one thing an IddCx driver publishes without this server
+    // installing anything of its own — the names VirtualDrivers/Virtual-Display-Driver use.
+    internal bool IsVirtualDisplay =>
+        Name is "Virtual Display Driver" or "IddSampleDriver Device HDR";
 }
 
 // What a screen says about its own colour, in the units the protocol carries: chromaticities
@@ -141,12 +146,15 @@ internal static unsafe class DisplayInventory
         return outputs;
     }
 
-    // Resolves [Display] Output: auto takes the primary screen, a label such as 0.1 that exact
-    // output, anything else the device name. Null with a reason rather than a different screen.
+    // Resolves [Display] Output: auto takes the virtual display driver when asked for and found,
+    // else the primary screen; a label such as 0.1 an exact output; anything else the device name.
     internal static DisplayOutput? Select(IReadOnlyList<GraphicsAdapter> adapters, string wanted,
-                                          out string reason)
+                                          bool preferVirtualDisplay, out string reason)
     {
-        var attached = adapters.SelectMany(a => a.Outputs).Where(o => o.AttachedToDesktop).ToList();
+        var attached = adapters
+            .SelectMany(a => a.Outputs.Select(o => (Adapter: a, Output: o)))
+            .Where(x => x.Output.AttachedToDesktop)
+            .ToList();
 
         if (attached.Count == 0)
         {
@@ -156,12 +164,24 @@ internal static unsafe class DisplayInventory
 
         if (string.Equals(wanted, "auto", StringComparison.OrdinalIgnoreCase))
         {
-            var chosen = attached.FirstOrDefault(o => o.IsPrimary) ?? attached[0];
+            if (preferVirtualDisplay)
+            {
+                var virtualOutput = attached.FirstOrDefault(x => x.Adapter.IsVirtualDisplay).Output;
+                if (virtualOutput is not null)
+                {
+                    reason = "the virtual display driver";
+                    return virtualOutput;
+                }
+            }
+
+            var chosen = attached.FirstOrDefault(x => x.Output.IsPrimary).Output ?? attached[0].Output;
             reason = chosen.IsPrimary ? "primary screen" : "first screen attached to the desktop";
             return chosen;
         }
 
-        var byLabel = attached.FirstOrDefault(o =>
+        var outputs = attached.Select(x => x.Output).ToList();
+
+        var byLabel = outputs.FirstOrDefault(o =>
             string.Equals(o.Label, wanted, StringComparison.OrdinalIgnoreCase));
         if (byLabel is not null)
         {
@@ -169,7 +189,7 @@ internal static unsafe class DisplayInventory
             return byLabel;
         }
 
-        var byName = attached.FirstOrDefault(o =>
+        var byName = outputs.FirstOrDefault(o =>
             o.DeviceName.Contains(wanted, StringComparison.OrdinalIgnoreCase));
         if (byName is not null)
         {
@@ -180,6 +200,11 @@ internal static unsafe class DisplayInventory
         reason = $"no screen matches \"{wanted}\"";
         return null;
     }
+
+    // Among every output, attached or not: the log line this drives is about the driver's
+    // absence, not about which screen the stream ends up on.
+    internal static bool HasVirtualDisplay(IReadOnlyList<GraphicsAdapter> adapters) =>
+        adapters.Any(a => a.IsVirtualDisplay);
 
     // The list as it goes into the log. Every configurable choice is printed with the value that
     // would select it, so that a report can be answered from the log alone.

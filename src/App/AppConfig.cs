@@ -43,10 +43,17 @@ internal enum VideoEncoder
 internal sealed class AppConfig
 {
     // [General]
-    // Off, and switched on for the first run alone: with no file yet, DebugWasAbsent makes that
-    // run verbose, and the file it writes says false, so the next start is quiet.
+    // Off; DebugWasAbsent makes the first run verbose regardless, so it is logged in full too.
     internal bool Debug { get; set; } = false;
     internal string HostName { get; set; } = "auto";
+
+    // The cursor this server draws into a stream's own picture, for the desktop always and for a
+    // game only when that game's switch asks for one. Off turns both off, whatever a game asks.
+    internal bool VirtualMouse { get; set; } = true;
+
+    // Prefer a third-party virtual display driver, when Output is "auto" and one is already on
+    // the machine — this server never installs or fetches one; see the installer's checkbox.
+    internal bool VirtualDisplay { get; set; } = false;
 
     // [Network]
     internal int PortBase { get; set; } = AppParameters.Ports.DefaultBase;
@@ -59,27 +66,20 @@ internal sealed class AppConfig
     // Ask the router to forward the streaming ports from the internet.
     internal bool Upnp { get; set; }
 
-    // [Display]. The codec, the frame rate and the bitrate had a section of their own and no longer
-    // do: they are the client's to choose, and every ceiling here was caught halving one silently.
+    // [Display]. The codec, the frame rate and the bitrate have no setting of their own: they are
+    // the client's to choose, and every ceiling here was caught halving one silently.
     internal string Output { get; set; } = "auto";
     internal VideoEncoder Encoder { get; set; } = VideoEncoder.Auto;
-    // Only the capture self-test reads this now. A stream decides for itself: always for the
-    // desktop, and for a game only when that game's own switch on the page asks for one.
+
+    // Only the capture self-test reads this — not [Display]: a stream decides its own pointer for
+    // itself, always for the desktop and for a game only when that game's own switch asks for one.
     internal bool CaptureCursor { get; set; } = true;
+
     internal bool Adapt { get; set; } = true;
 
     // Scale the desktop up for a client whose screen has more pixels than this one. Streams of
     // the desktop only; a game draws itself and is not affected.
     internal bool ScaleDesktop { get; set; } = true;
-
-    // [Audio]
-    internal bool AudioEnabled { get; set; } = true;
-    internal string AudioDevice { get; set; } = "auto";
-
-    // [Input]. Controllers are not here: whether they work is whether a controller bus driver is
-    // installed, which is a thing somebody installed on purpose, not a question to ask twice.
-    internal bool Keyboard { get; set; } = true;
-    internal bool Mouse { get; set; } = true;
 
     // [Games]
     internal bool Steam { get; set; } = true;
@@ -101,6 +101,11 @@ internal sealed class AppConfig
 
     // Set when Debug was absent: the first run is logged in full.
     internal bool DebugWasAbsent { get; private set; }
+
+    // Settings this server knows that the file just read did not — added since, usually by an
+    // upgrade; empty on a first run, since nothing is "added" against a file that never existed.
+    internal IReadOnlyList<(string Section, string Key)> AddedSettings { get; private set; } =
+        Array.Empty<(string, string)>();
 
     // Derived ports. The client is handed the base and derives the rest, so these must stay in step
     // with what /serverinfo announces.
@@ -179,6 +184,9 @@ internal sealed class AppConfig
             var config = ConfFormat.Read(file, warn);
             config.Path = candidate;
             config.DebugWasAbsent = !file.Has("General", "Debug");
+            // Read() above already asked for every setting there is; whatever it did not find in
+            // the file is everything to report and add back with its default.
+            config.AddedSettings = file.MissingKeys;
             return config;
         }
 

@@ -28,10 +28,11 @@ internal static class CoverArt
     // Short names match too many things; below this length nothing is searched for.
     private const int ShortestSearchableTitle = 4;
 
-    // Handed over exactly as found. Sunshine — what every Moonlight is tested against — does the
-    // same: it streams the file and lets the client fit its own box art, cropped or not, itself.
-    // A shape imposed here fought every client's own crop instead of matching any of them.
     internal const string Folder = "covers";
+
+    // 3:4, the box art shape moonlight-qt and moonlight-android size their own grids to. A cover
+    // of another shape — Steam's is 2:3 — is padded to this (PadToAspect), never cropped.
+    private const double CoverAspect = 3.0 / 4.0;
 
     // Finds and stores the missing pictures. Never throws: a picture is the least important thing
     // this server has, and no failure here may disturb a stream.
@@ -44,6 +45,11 @@ internal static class CoverArt
         {
             Directory.CreateDirectory(folder);
             Prune(library, folder);
+
+            var forgotten = library.ForgetMissingArtwork();
+            if (forgotten > 0)
+                Log.Info($"{forgotten} cover picture(s) were gone from disk and will be looked " +
+                         "up again");
 
             if (!config.GamesArtwork) return;
 
@@ -213,19 +219,18 @@ internal static class CoverArt
         return true;
     }
 
-    // Any picture Windows can decode, re-expressed as a PNG; null when it cannot, which off the
-    // web usually means WebP or AVIF on a machine without the imaging component. One format for
-    // every cover this server writes, because Sunshine's own box art reader takes nothing else,
-    // and every Moonlight is built expecting whatever a GameStream host answers with to be one.
+    // Any picture Windows can decode, re-expressed as a PNG since that is the one format every
+    // Moonlight client's box art reader is built to expect; null when it cannot be decoded.
     private static byte[]? ToPng(byte[] picture)
     {
         try
         {
             using var source = new MemoryStream(picture);
             using var image = System.Drawing.Image.FromStream(source);
+            using var padded = PadToAspect(image, CoverAspect);
 
             using var output = new MemoryStream();
-            image.Save(output, System.Drawing.Imaging.ImageFormat.Png);
+            padded.Save(output, System.Drawing.Imaging.ImageFormat.Png);
             return output.ToArray();
         }
         catch (Exception error)
@@ -233,6 +238,31 @@ internal static class CoverArt
             Log.Info($"a picture could not be converted: {error.GetType().Name}: {error.Message}");
             return null;
         }
+    }
+
+    // Adds transparent margin on whichever side is short, so the canvas is exactly the target
+    // aspect and every pixel of the original survives untouched at its native resolution.
+    internal static System.Drawing.Bitmap PadToAspect(System.Drawing.Image original, double aspect)
+    {
+        var width = original.Width;
+        var height = original.Height;
+
+        var canvasWidth = width;
+        var canvasHeight = height;
+
+        if (width / (double)height > aspect)
+            canvasHeight = (int)Math.Round(width / aspect);
+        else
+            canvasWidth = (int)Math.Round(height * aspect);
+
+        var canvas = new System.Drawing.Bitmap(canvasWidth, canvasHeight,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+        using var g = System.Drawing.Graphics.FromImage(canvas);
+        g.Clear(System.Drawing.Color.Transparent);
+        g.DrawImage(original, (canvasWidth - width) / 2, (canvasHeight - height) / 2, width, height);
+
+        return canvas;
     }
 
     private static async Task<string?> FetchOneAsync(HttpClient http, GameDb catalogue,

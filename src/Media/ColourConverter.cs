@@ -89,9 +89,8 @@ internal sealed unsafe class ColourConverter : IDisposable
         _sourceTexture = texture;
     }
 
-    // Draws the two planes, the pointer blended in from cursorOverlay if there is one. The encoder
-    // reads Output afterwards; nothing here waits for the card, because the encode that follows is
-    // on the same context and is ordered behind it.
+    // Draws the two planes, the pointer blended in from cursorOverlay if there is one. Nothing
+    // here waits for the card: the encode that reads Output next is ordered behind it already.
     internal void Convert(nint texture, nint cursorOverlay = 0)
     {
         Source(texture);
@@ -196,9 +195,8 @@ internal sealed unsafe class ColourConverter : IDisposable
         BuildDummyOverlay();
     }
 
-    // One pixel, transparent, bound at t1 for a stream with nothing to draw a pointer with — a
-    // desktop stream with the pointer switched off, or a game, which draws its own. Zeroed
-    // through a render target view rather than trusted to come up that way on its own.
+    // One pixel, transparent, bound at t1 when there is no pointer to draw. Zeroed through a
+    // render target view rather than trusted to come up that way on its own.
     private void BuildDummyOverlay()
     {
         _dummyOverlay = D3D11.CreateTexture2D(_device, new D3D11Texture2DDesc
@@ -241,9 +239,8 @@ internal sealed unsafe class ColourConverter : IDisposable
         return $$"""
             Texture2D<float4> source : register(t0);
 
-            // The pointer, drawn by GDI on the CPU side onto its own eight-bit BGRA texture, the
-            // same size as source: alpha zero where there is nothing, the cursor's own colour and
-            // coverage where there is. A one-pixel transparent stand-in when there is none at all.
+            // The pointer, drawn by GDI onto its own eight-bit BGRA texture the same size as
+            // source (alpha zero where there is nothing); a one-pixel stand-in when there is none.
             Texture2D<float4> overlay : register(t1);
 
             SamplerState blend : register(s0);
@@ -285,10 +282,8 @@ internal sealed unsafe class ColourConverter : IDisposable
                 return pq(mul(toRec2020, rgb) * {{Number(ScRgbWhiteNits)}});
             }
 
-            // GDI drew the pointer in plain sRGB device colour, with no notion of nits. Undoing
-            // the sRGB curve puts it on the same Rec. 709 linear scale scRGB already uses for the
-            // desktop, where 1.0 is the eighty nits both this pipeline and Windows itself take as
-            // the reference white for ordinary content shown over an HDR one.
+            // GDI drew the pointer in plain sRGB, with no notion of nits. Undoing the sRGB curve
+            // puts it on the same Rec. 709 linear scale scRGB already uses for the desktop.
             float3 fromSrgb(float3 c)
             {
                 return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);

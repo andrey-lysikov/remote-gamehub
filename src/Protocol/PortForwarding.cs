@@ -28,6 +28,10 @@ internal sealed class PortForwarding : IAsyncDisposable
 
     private static readonly TimeSpan RenewEvery = TimeSpan.FromMinutes(20);
 
+    // How often the search for a router is tried again after it found none. Shorter than the
+    // renewal: not being forwarded at all is more urgent than a mapping that is merely due.
+    private static readonly TimeSpan SearchRetryEvery = TimeSpan.FromMinutes(2);
+
     private readonly AppConfig _config;
     private readonly CancellationTokenSource _stopping = new();
 
@@ -37,6 +41,7 @@ internal sealed class PortForwarding : IAsyncDisposable
     private string? _localAddress;
     private Task? _renewing;
     private bool _announced;
+    private bool _searchFailedOnce;
 
     internal PortForwarding(AppConfig config) => _config = config;
 
@@ -61,23 +66,43 @@ internal sealed class PortForwarding : IAsyncDisposable
     {
         try
         {
-            if (!await FindRouterAsync())
-            {
-                Log.Warn(
-                    "No router answered the search for one that forwards ports, so the streaming\n" +
-                    "ports are reachable on this network only. Either the router does not speak\n" +
-                    "UPnP or it has it switched off — which many do by default, and for good\n" +
-                    "reason. Forward the ports by hand in the router if you meant to play from\n" +
-                    "outside: " + string.Join(", ", Wanted.Select(w => $"{w.Port}/{w.Protocol}")));
-                return;
-            }
-
-            // Before anything is asked for: a mapping to an address that is itself behind the
-            // provider's translation forwards nothing, and the log should say so once.
-            await ReportExternalAddressAsync();
-
             while (!_stopping.IsCancellationRequested)
             {
+                if (_controlUrl is null)
+                {
+                    if (!await FindRouterAsync())
+                    {
+                        var message =
+                            "No router answered the search for one that forwards ports, so the\n" +
+                            "streaming ports are reachable on this network only. Either the router\n" +
+                            "does not speak UPnP or it has it switched off — which many do by\n" +
+                            "default, and for good reason. Forward the ports by hand in the router\n" +
+                            "if you meant to play from outside: " +
+                            string.Join(", ", Wanted.Select(w => $"{w.Port}/{w.Protocol}")) +
+                            $"\nTried again every {SearchRetryEvery.TotalMinutes:0} minute(s).";
+
+                        // Said once at a level worth noticing; a router that stays off is not news
+                        // the second time, and this may retry for as long as the server runs.
+                        if (_searchFailedOnce) Log.Info(message); else Log.Warn(message);
+                        _searchFailedOnce = true;
+
+                        try
+                        {
+                            await Task.Delay(SearchRetryEvery, _stopping.Token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+
+                        continue;
+                    }
+
+                    // Before anything is asked for: a mapping to an address that is itself behind
+                    // the provider's translation forwards nothing, and the log should say so once.
+                    await ReportExternalAddressAsync();
+                }
+
                 await MapAllAsync();
 
                 try

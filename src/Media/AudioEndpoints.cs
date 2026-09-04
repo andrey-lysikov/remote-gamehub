@@ -77,10 +77,8 @@ internal static unsafe class AudioEndpoints
         }
     }
 
-    // Widens a device's own shared-mode format to carry more channels, keeping its rate, its bit
-    // depth and its sample type exactly as they were — only the channel count and the speaker mask
-    // change. Returns the format as it was, to be handed back to SetDeviceFormat afterwards; null
-    // when nothing was changed, whether because it did not need to be or because it would not.
+    // Widens a device's own shared-mode format to carry more channels, keeping rate, bit depth
+    // and sample type; returns the format as it was, for SetDeviceFormat, or null if unchanged.
     internal static byte[]? Widen(void* device, string deviceId, int channels)
     {
         var mask = channels switch
@@ -274,9 +272,8 @@ internal sealed unsafe class AudioAdaptation : IDisposable
         }
     }
 
-    // "Steam Streaming Speakers" is a virtual device and often stuck at whatever it first
-    // negotiated — commonly stereo — until something asks it for more. Widened here rather than
-    // left to the capture's own warning, which only says the extra channels went nowhere.
+    // "Steam Streaming Speakers" is a virtual device, often stuck at whatever it first
+    // negotiated (commonly stereo) until something asks it for more, as here.
     private static (string? WidenedId, byte[]? Previous) WidenIfNeeded(void* device, string deviceId,
                                                                         int channels)
     {
@@ -327,6 +324,7 @@ internal sealed unsafe class AudioAdaptation : IDisposable
 
         var initialised = Wasapi.CoInitializeEx(0, Wasapi.COINIT_MULTITHREADED);
         void* policy = null;
+        var whole = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
@@ -351,6 +349,9 @@ internal sealed unsafe class AudioAdaptation : IDisposable
         {
             Com.Release(policy);
             if (initialised >= 0) Wasapi.CoUninitialize();
+
+            if (whole.ElapsedMilliseconds > 500)
+                Log.Warn($"putting the sound back took {whole.ElapsedMilliseconds} ms");
         }
     }
 }

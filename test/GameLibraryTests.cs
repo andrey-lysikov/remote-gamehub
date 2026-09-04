@@ -141,4 +141,27 @@ public class GameLibraryTests
         Assert.Single(library.NeedingArtwork(TimeSpan.FromDays(-1)));
         Assert.Equal(new[] { cover }, library.ArtworkPaths());
     }
+
+    [Fact]
+    public void A_cover_missing_from_disk_is_offered_again()
+    {
+        using var folder = new TestFolder();
+        using var database = Database.Open(folder.Path);
+        var library = new GameLibrary(database);
+
+        var id = library.Save(0, "One", @"C:\one.exe", null);
+        var cover = folder.File(@"covers\1.jpg", "not really a picture");
+        library.RecordArtwork(id, cover);
+        Assert.Empty(library.NeedingArtwork(TimeSpan.FromDays(30)));
+
+        // The cache folder was cleared by hand: the row still points at the file, but it is gone.
+        File.Delete(cover);
+        Assert.Equal(1, library.ForgetMissingArtwork());
+
+        Assert.Null(library.BoxArtPath(id));
+        Assert.Single(library.NeedingArtwork(TimeSpan.FromDays(30)));
+
+        // A second pass with nothing newly missing finds nothing to forget.
+        Assert.Equal(0, library.ForgetMissingArtwork());
+    }
 }

@@ -152,12 +152,21 @@ internal sealed class SessionManager : IDisposable
         var target = gameId > 0 ? _games.Target(gameId) : null;
         var poster = gameId > 0 ? _games.BoxArtPath(gameId) : null;
 
+        var output = ResolveOutput();
+        if (output is null)
+        {
+            lock (_gate) _pending = null;
+            _tray.SetState("waiting for a client");
+            return;
+        }
+
         try
         {
-            var session = new StreamSession(_config, _output, _encoder, _gamepads, _tray,
+            var session = new StreamSession(_config, output, _encoder, _gamepads, _tray,
                 request, negotiation, Ended, target?.Title, poster, GameIsUp,
                 gamePointer: target?.Pointer ?? false,
-                gameQuality: target?.Quality ?? StreamQuality.High);
+                gameQuality: target?.Quality ?? StreamQuality.High,
+                showCard: target?.ShowCard ?? true);
 
             lock (_gate)
             {
@@ -178,6 +187,43 @@ internal sealed class SessionManager : IDisposable
             }
             _tray.SetState("waiting for a client");
         }
+    }
+
+    // Checked again rather than trusted: an index valid at startup can throw
+    // DXGI_ERROR_NOT_FOUND later, so this retries a few times before refusing the stream.
+    private DisplayOutput? ResolveOutput()
+    {
+        // Mirrors the handful of quick tries over ~2s OpenCaptureAfterModeChange gives an
+        // ordinary mode change: a remote session's own screen is not always there instantly.
+        const int attempts = 10;
+        string reason = string.Empty;
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            var inventory = DisplayInventory.Enumerate();
+            var output = DisplayInventory.Select(inventory, _config.Output, _config.VirtualDisplay,
+                out reason);
+
+            if (output is not null)
+            {
+                if (attempt > 1)
+                    Log.Info($"the screen was found on try {attempt}: {reason}");
+
+                if (output.AdapterIndex != _output.AdapterIndex ||
+                    output.OutputIndex != _output.OutputIndex)
+                {
+                    Log.Info($"the screen to capture is now {output.Label} \"{output.DeviceName}\", " +
+                             $"not {_output.Label} as it was at startup ({reason})");
+                }
+
+                return output;
+            }
+
+            if (attempt < attempts) Thread.Sleep(AppParameters.Capture.RecreateDelayMs);
+        }
+
+        Log.Warn($"the stream is refused: the screen this server captures is gone ({reason}).");
+        return null;
     }
 
     // Reattaches a client to the game already running. Nothing is started; it only accepts the key
@@ -296,6 +342,13 @@ internal sealed class SessionManager : IDisposable
     // shell path or an executable, so it goes to the shell; the watcher is what says it started.
     private bool StartApplication(int appId)
     {
+        // Already up: a fresh /launch after nothing worse than a dropped connection must not run
+        // the command again or restart the watcher, or the card comes back for a game on screen.
+        lock (_gate)
+        {
+            if (_watcher is { IsRunning: true } running && running.AppId == appId) return true;
+        }
+
         var gameId = appId - AppParameters.Protocol.GameAppIdOffset;
         var target = gameId > 0 ? _games.Target(gameId) : null;
 
@@ -432,9 +485,13 @@ internal sealed class StreamSession : IDisposable
         if (!_negotiation.HdrRequested) return "standard range, which is what the client asked for";
 
         var why =
-            !_capabilities.Hdr ? "this card cannot encode ten-bit HEVC"
-            : _negotiation.Codec != VideoCodec.Hevc ? "the client negotiated H.264"
-            : "the desktop came back in eight bits";
+            _negotiation.Codec == VideoCodec.Hevc
+                ? (!_capabilities.Hdr ? "this card cannot encode ten-bit HEVC"
+                                      : "the desktop came back in eight bits")
+            : _negotiation.Codec == VideoCodec.Av1
+                ? (!_capabilities.Av1Hdr ? "this card cannot encode ten-bit AV1"
+                                         : "the desktop came back in eight bits")
+            : "the client negotiated H.264";
 
         return $"standard range although the client asked for HDR — {why}";
     }
@@ -456,10 +513,17 @@ internal sealed class StreamSession : IDisposable
 
         var screen = SentRefreshHz > 0 ? $" ({ScreenHz} Hz)" : string.Empty;
 
+        var audio = _negotiation.AudioChannels switch
+        {
+            8 => "7.1 Surround",
+            6 => "5.1 Surround",
+            _ => "Stereo",
+        };
+
         return $"{width}×{height} {_negotiation.Fps}fps{screen} · " +
                $"{VideoEncoders.Name(_negotiation.Codec)}" +
                $"{(SentHdr ? " HDR" : string.Empty)}" +
-               $"{(_negotiation.Yuv444 ? " 4:4:4" : string.Empty)} · {rate}";
+               $"{(_negotiation.Yuv444 ? " 4:4:4" : string.Empty)} · {rate} · {audio}";
     }
 
     // The screen's refresh rate as it is written. A rate that is not the frame rate is the whole
@@ -475,6 +539,7 @@ internal sealed class StreamSession : IDisposable
     private readonly string? _gameTitle;
     private readonly string? _posterPath;
     private readonly Func<bool> _gameIsUp;
+    private readonly bool _showCard;
 
     private readonly VideoStream _video;
     private readonly AudioStream? _audio;
@@ -504,7 +569,7 @@ internal sealed class StreamSession : IDisposable
                            StreamNegotiation negotiation, Action<string> ended,
                            string? gameTitle = null, string? posterPath = null,
                            Func<bool>? gameIsUp = null, bool gamePointer = false,
-                           StreamQuality gameQuality = StreamQuality.High)
+                           StreamQuality gameQuality = StreamQuality.High, bool showCard = true)
     {
         _config = config;
         _output = output;
@@ -514,7 +579,10 @@ internal sealed class StreamSession : IDisposable
         _negotiation = negotiation;
         _ended = ended;
         _gameTitle = gameTitle;
-        _gamePointer = gamePointer;
+        _showCard = showCard;
+        // Off altogether turns off every pointer this server would draw of its own, the desktop's
+        // included: a game's own switch is an override of this, not something beside it.
+        _gamePointer = config.VirtualMouse && gamePointer;
 
         // A client from outside this network is on a link nobody measured, so it is given one level
         // less than the game asks for. Low is the floor: there is nothing below it to drop to.
@@ -532,10 +600,10 @@ internal sealed class StreamSession : IDisposable
 
         _video = new VideoStream(config.VideoPort, config.BindAddress, negotiation);
         _control = new ControlStream(config.ControlPort, config.BindAddress, request.RiKey);
-        _input = new ClientInput(config, output.Bounds, gamepads);
+        _input = new ClientInput(output.Bounds, gamepads);
 
-        _audio = config.AudioEnabled
-            ? new AudioStream(config.AudioPort, config.BindAddress, config.AudioDevice,
+        _audio = AppParameters.Audio.Enabled
+            ? new AudioStream(config.AudioPort, config.BindAddress, AppParameters.Audio.Device,
                               negotiation, request.RiKey, request.RiKeyId)
             : null;
 
@@ -580,12 +648,20 @@ internal sealed class StreamSession : IDisposable
 
     internal void Start()
     {
+        // Network input is not "local" to Windows: left alone, the display sleeps and stops
+        // composing, and this server would go on sending the same last frame, a freeze.
+        Kernel32.SetThreadExecutionState(
+            Kernel32.ES_CONTINUOUS | Kernel32.ES_SYSTEM_REQUIRED | Kernel32.ES_DISPLAY_REQUIRED);
+
         _control.Start();
         _video.Start();
         _audio?.Start();
 
         _running = true;
-        _thread = new Thread(CaptureAndEncode) { IsBackground = true, Name = "stream" };
+        // Above normal so the OS scheduler does not sit on this thread mid frame: VideoStream's
+        // own pacer spins rather than sleeps, and a preempted spin reads in the log as a stall.
+        _thread = new Thread(CaptureAndEncode) { IsBackground = true, Name = "stream",
+                                                 Priority = ThreadPriority.Highest };
         _thread.Start();
 
         _tray.SetState(Describe());
@@ -609,11 +685,11 @@ internal sealed class StreamSession : IDisposable
 
         try
         {
-            // HDR only when everything agrees: the client asked, the card encodes ten-bit HEVC,
-            // and the stream is HEVC. Whether the screen really is in HDR is answered by the
-            // capture below, which is the only place that knows.
-            var hdr = _negotiation.HdrRequested && _capabilities.Hdr &&
-                      _negotiation.Codec == VideoCodec.Hevc;
+            // HDR only when the client asked and the card/codec (HEVC or AV1) can send ten bits;
+            // whether the screen really is in HDR is for the capture below to answer.
+            var hdr = _negotiation.HdrRequested &&
+                      ((_negotiation.Codec == VideoCodec.Hevc && _capabilities.Hdr) ||
+                       (_negotiation.Codec == VideoCodec.Av1 && _capabilities.Av1Hdr));
 
             // Said here rather than left to the capture to discover, because this is the only
             // place that knows the client asked at all.
@@ -625,16 +701,21 @@ internal sealed class StreamSession : IDisposable
             var desktop = AppId == AppParameters.Protocol.DesktopAppId;
 
             display = DisplayAdaptation.Apply(_output, _negotiation.Width, _negotiation.Height,
-                _negotiation.Fps, hdr, _capabilities.Hdr, _config.Adapt,
+                _negotiation.Fps, hdr, _capabilities.AnyHdr, _config.Adapt,
                 scaleForClient: desktop && _config.ScaleDesktop);
 
             _input.SetScreen(display.Bounds);
 
-            // Always into the desktop's picture, which no setting may take away. Into a game's only
-            // when it was marked as needing one: two pointers a step apart is worse than none.
-            _drawPointer = desktop || _gamePointer;
+            // Into the desktop unless the virtual cursor is off, into a game only when it was
+            // marked as needing one: two pointers a step apart is worse than none.
+            _drawPointer = (desktop && _config.VirtualMouse) || _gamePointer;
 
-            if (!desktop)
+            if (desktop && !_config.VirtualMouse)
+            {
+                Log.Info("the virtual cursor is turned off, so the desktop stream carries no " +
+                         "pointer of this server's drawing");
+            }
+            else if (!desktop)
             {
                 Log.Info(_gamePointer
                     ? "this game is marked as needing a pointer, so one is drawn into its picture"
@@ -678,8 +759,16 @@ internal sealed class StreamSession : IDisposable
 
             try
             {
-                // The half floats the desktop was captured in are nothing an encoder takes: the
-                // shader turns them into ten-bit BT.2020 PQ, and that texture is what goes in.
+                // The shader turns the half-float capture into ten-bit P010 only, never 4:4:4, so
+                // both asked for together would otherwise mismatch what the driver is fed.
+                if (tenBit && _negotiation.Yuv444)
+                {
+                    Log.Info("4:4:4 colour was asked for together with HDR; HDR sends 4:2:0 " +
+                             "chroma only, so this stream keeps 4:2:0");
+                }
+
+                var yuv444 = !tenBit && _negotiation.Yuv444;
+
                 if (tenBit)
                 {
                     converter = ColourConverter.Open(duplicator.Device, duplicator.Context,
@@ -688,13 +777,12 @@ internal sealed class StreamSession : IDisposable
 
                 encoder = VideoEncoders.Open(duplicator.Device, _capabilities, _negotiation.Codec,
                     duplicator.Width, duplicator.Height, _negotiation.BitrateKbps,
-                    _negotiation.Fps, tenBit, _negotiation.Yuv444, _quality);
+                    _negotiation.Fps, tenBit, yuv444, _quality);
             }
             catch (Exception error) when (tenBit)
             {
-                // The card claimed ten bits and would not open them, or the shader would not
-                // build. Eight bits instead of no stream — and the screen has to leave HDR for
-                // that, because half floats are not something the eight-bit encoder can read.
+                // Eight bits instead of no stream; the screen leaves HDR too, since half floats
+                // are not something the eight-bit encoder can read.
                 Log.Warn($"the ten-bit path would not open ({error.Message}); " +
                          "the stream falls back to eight bits");
 
@@ -724,7 +812,7 @@ internal sealed class StreamSession : IDisposable
 
             // Made before a single frame has been sent, so the first thing the client ever sees
             // of this machine is the card and not its desktop. It costs one drawing and one copy.
-            if (_gameTitle is not null && !_gameIsUp())
+            if (_showCard && _gameTitle is not null && !_gameIsUp())
             {
                 card = StartingCard.Create(duplicator.Device, duplicator.Context,
                     duplicator.Width, duplicator.Height, duplicator.FrameFormat,
@@ -822,22 +910,27 @@ internal sealed class StreamSession : IDisposable
                         continue;
                     }
 
+                    // Reopen() always hands back a new frame texture, same size or not; keeping
+                    // the old encoder was seen crashing on it once (NV_ENC_ERR_INVALID_PARAM).
                     if (duplicator.Width != width || duplicator.Height != height ||
                         duplicator.FrameFormat != format)
                     {
-                        // The screen changed mode or colour depth. The encoder is built
-                        // around one size and format, so it is rebuilt with a key frame.
                         Log.Info($"the screen changed to {duplicator.Width}x{duplicator.Height} " +
                                  $"(format {duplicator.FrameFormat}); the encoder is being rebuilt");
-
-                        encoder.Dispose();
-                        encoder = VideoEncoders.Open(duplicator.Device, _capabilities,
-                            _negotiation.Codec, duplicator.Width, duplicator.Height,
-                            _negotiation.BitrateKbps, _negotiation.Fps,
-                            duplicator.FrameFormat == Dxgi.DXGI_FORMAT_R10G10B10A2_UNORM,
-                            _negotiation.Yuv444, _quality);
-                        _keyFrameWanted = true;
                     }
+                    else
+                    {
+                        Log.Info("the desktop capture was reopened; the encoder is being rebuilt " +
+                                 "with it");
+                    }
+
+                    encoder.Dispose();
+                    encoder = VideoEncoders.Open(duplicator.Device, _capabilities,
+                        _negotiation.Codec, duplicator.Width, duplicator.Height,
+                        _negotiation.BitrateKbps, _negotiation.Fps,
+                        duplicator.FrameFormat == Dxgi.DXGI_FORMAT_R10G10B10A2_UNORM,
+                        _negotiation.Yuv444, _quality);
+                    _keyFrameWanted = true;
 
                     continue;
                 }
@@ -891,6 +984,10 @@ internal sealed class StreamSession : IDisposable
                         // The picture changes completely, so the client needs a frame it can
                         // start again from rather than a difference against a card.
                         _keyFrameWanted = true;
+                    }
+                    else
+                    {
+                        card.Update();
                     }
                 }
 
@@ -1068,17 +1165,42 @@ internal sealed class StreamSession : IDisposable
 
     public void Dispose()
     {
+        var whole = Stopwatch.StartNew();
         _running = false;
+
+        // Releases the hold Start() put on the display and the system, so this machine sleeps on
+        // its own schedule again once nothing is streaming from it.
+        Kernel32.SetThreadExecutionState(Kernel32.ES_CONTINUOUS);
+
         _gamepads.Feedback -= _rumble;
         _input.Release();
 
         // Never from the capture thread itself, which would be a wait that cannot end.
-        if (_thread is not null && _thread != Thread.CurrentThread) _thread.Join(2000);
+        if (_thread is not null && _thread != Thread.CurrentThread)
+        {
+            var joined = _thread.Join(2000);
+            if (!joined)
+            {
+                Log.Warn($"the capture thread did not stop within 2000 ms; its own teardown " +
+                         "(the screen restore, most likely) is still running in the background");
+            }
+            else if (whole.ElapsedMilliseconds > 500)
+            {
+                Log.Info($"the capture thread stopped in {whole.ElapsedMilliseconds} ms");
+            }
+        }
 
         // The control stream last: it is the one that says goodbye, and it should still be able
         // to when the picture has already stopped.
+        var audioStarted = whole.ElapsedMilliseconds;
         _audio?.Dispose();
+        if (_audio is not null && whole.ElapsedMilliseconds - audioStarted > 500)
+            Log.Info($"the sound was put back in {whole.ElapsedMilliseconds - audioStarted} ms");
+
         _video.Dispose();
         _control.Dispose();
+
+        if (whole.ElapsedMilliseconds > 1000)
+            Log.Warn($"ending this stream took {whole.ElapsedMilliseconds} ms in total");
     }
 }

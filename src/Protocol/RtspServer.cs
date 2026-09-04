@@ -46,6 +46,8 @@ internal sealed record StreamNegotiation(
     {
         // 5.1 as this server maps it: two coupled pairs and two mono streams.
         6 => highQuality ? 1440 : 576,
+        // 7.1: three coupled pairs and two mono streams.
+        8 => highQuality ? 1920 : 768,
         _ => highQuality ? 480 : 192,
     };
 }
@@ -204,7 +206,7 @@ internal sealed class RtspServer : IAsyncDisposable
 
     // ------------------------------------------------------------------ reading
 
-    private sealed class RtspRequest
+    internal sealed class RtspRequest
     {
         internal string Command = string.Empty;
         internal string Target = string.Empty;
@@ -259,7 +261,7 @@ internal sealed class RtspServer : IAsyncDisposable
         return request;
     }
 
-    private static int IndexOfBlankLine(byte[] buffer, int used)
+    internal static int IndexOfBlankLine(byte[] buffer, int used)
     {
         for (var i = 0; i + 3 < used; i++)
         {
@@ -270,7 +272,7 @@ internal sealed class RtspServer : IAsyncDisposable
         return -1;
     }
 
-    private static RtspRequest? ParseHead(string head)
+    internal static RtspRequest? ParseHead(string head)
     {
         var lines = head.Split("\r\n");
         var parts = lines[0].Split(' ');
@@ -329,11 +331,13 @@ internal sealed class RtspServer : IAsyncDisposable
         sdp.Append("a=x-ss-general.encryptionRequested:1\n");
 
         // The digit strings Sunshine advertises (audio.cpp stream_configs, cmd_describe's
-        // rotation). Both layouts always: a client reads only the lines for the count it chose.
+        // rotation). Every layout always: a client reads only the lines for the count it chose.
         sdp.Append("a=fmtp:97 surround-params=21101\n");
         sdp.Append("a=fmtp:97 surround-params=21101\n");
         sdp.Append("a=fmtp:97 surround-params=642012453\n");
         sdp.Append("a=fmtp:97 surround-params=660012345\n");
+        sdp.Append("a=fmtp:97 surround-params=85301245367\n");
+        sdp.Append("a=fmtp:97 surround-params=88001234567\n");
 
         return Respond(request, 200, "OK", payload: sdp.ToString());
     }
@@ -422,14 +426,14 @@ internal sealed class RtspServer : IAsyncDisposable
                 return Respond(request, 400, "BAD REQUEST");
             }
 
-            // Stereo and 5.1 are the two layouts this server encodes. Anything else — 7.1 — is
+            // Stereo, 5.1 and 7.1 are the three layouts this server encodes. Anything else is
             // refused, because there is no Opus configuration here to send it in.
-            if (audioChannels != 2 && audioChannels != 6)
+            if (audioChannels != 2 && audioChannels != 6 && audioChannels != 8)
             {
                 Log.Warn(
                     $"The client asked for {audioChannels} audio channels. This server sends\n" +
-                    "stereo or 5.1 and nothing else, so the negotiation is refused.\n" +
-                    "What to do: set the client's audio to stereo or 5.1.");
+                    "stereo, 5.1 or 7.1 and nothing else, so the negotiation is refused.\n" +
+                    "What to do: set the client's audio to stereo, 5.1 or 7.1.");
                 return Respond(request, 400, "BAD REQUEST");
             }
 
@@ -523,7 +527,7 @@ internal sealed class RtspServer : IAsyncDisposable
 
     // a=name:value lines, plus a trailing space stripped from the value — the client's
     // SDP generator leaves one behind some values, and Sunshine strips it the same way.
-    private static Dictionary<string, string> ParseSdpAttributes(string payload)
+    internal static Dictionary<string, string> ParseSdpAttributes(string payload)
     {
         var attributes = new Dictionary<string, string>(StringComparer.Ordinal);
 

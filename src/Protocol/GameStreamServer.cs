@@ -327,9 +327,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
                          // Ten-bit HEVC is what a client looks for before it will offer high
                          // dynamic range at all, so this bit is the whole of the offer.
                          | (_encoder.Hdr ? AppParameters.Protocol.CodecHevcMain10 : 0)
-                         // Eight-bit AV1 only: ten bits there would need the same conversion
-                         // high dynamic range is waiting on.
                          | (_encoder.Av1 ? AppParameters.Protocol.CodecAv1Main8 : 0)
+                         | (_encoder.Av1Hdr ? AppParameters.Protocol.CodecAv1Main10 : 0)
                          // Colour at full resolution, per codec: the client asks for it with
                          // chromaSamplingType and only when one of these said it could.
                          | (_encoder.H264Yuv444 ? AppParameters.Protocol.CodecH264High8_444 : 0)
@@ -396,7 +395,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
     private void WriteApp(XmlWriter xml, long id, string title)
     {
         xml.WriteStartElement("App");
-        xml.WriteElementString("IsHdrSupported", _encoder.Hdr ? "1" : "0");
+        xml.WriteElementString("IsHdrSupported", _encoder.AnyHdr ? "1" : "0");
         xml.WriteElementString("AppTitle", title);
         xml.WriteElementString("ID", id.ToString(CultureInfo.InvariantCulture));
         xml.WriteEndElement();
@@ -567,9 +566,10 @@ internal sealed class GameStreamServer : IAsyncDisposable
             ? surround & 0xFFFF
             : 2;
 
-        // The key identifier is signed on the wire and unsigned here; the bits are kept, since both
-        // ends derive IVs from it. Only 5.1 moves the sound — 7.1 is refused at the ANNOUNCE.
-        return new LaunchRequest(appId, riKey, unchecked((uint)riKeyId), channels == 6 ? 6 : 2);
+        // Signed on the wire, unsigned here — the bits are kept, since both ends derive IVs from
+        // it. 5.1 and 7.1 both move the sound; anything else stays on two.
+        var audioChannels = channels == 6 ? 6 : channels == 8 ? 8 : 2;
+        return new LaunchRequest(appId, riKey, unchecked((uint)riKeyId), audioChannels);
     }
 
     private string SessionUrl() =>

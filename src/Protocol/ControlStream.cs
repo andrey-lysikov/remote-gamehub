@@ -30,6 +30,10 @@ internal sealed class ControlStream : IDisposable
     // because logged as an unhandled message it is ten lines a second and rotates the log away.
     private const ushort TypePeriodicPing = 0x0200;
 
+    // SS_SET_RGB_LED — host to client only, per moonlight-common-c, yet some client sends it
+    // back once a session too. Harmless, and understood well enough not to log.
+    private const ushort TypeSetRgbLed = 0x5502;
+
     // The protocol's "ended normally" reason code, which clients show as a clean end rather
     // than an error.
     private const uint TerminationGraceful = 0x80030023;
@@ -157,8 +161,9 @@ internal sealed class ControlStream : IDisposable
                 case TypeStartB:
                 case TypeFrameStats:
                 case TypePeriodicPing:
-                    // Handshake chatter, the keep-alive and periodic reports. Nothing acts on
-                    // them yet; the loss numbers may one day steer the bitrate.
+                case TypeSetRgbLed:
+                    // Handshake chatter, the keep-alive, periodic reports, and the client quirk
+                    // above. Nothing acts on them yet.
                     break;
 
                 default:
@@ -200,9 +205,8 @@ internal sealed class ControlStream : IDisposable
         var payload = new byte[27];
         payload[0] = (byte)(enabled ? 1 : 0);
 
-        // Red, green, blue, the white point, then the luminances. The two zeros are the content's
-        // own light levels, which nothing here measures: a desktop is not graded material, and a
-        // number invented at this end is worse than the client's own default.
+        // Red, green, blue, white point, then luminances. The two zeros are content light levels
+        // nothing here measures: a desktop is not graded, and an invented number is worse than none.
         var values = new[]
         {
             display.RedX, display.RedY, display.GreenX, display.GreenY,

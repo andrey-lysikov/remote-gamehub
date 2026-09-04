@@ -124,6 +124,8 @@ public class SmallPiecesTests
     [InlineData(2, true, 480)]
     [InlineData(6, false, 576)]
     [InlineData(6, true, 1440)]
+    [InlineData(8, false, 768)]
+    [InlineData(8, true, 1920)]
     public void The_audio_bitrate_follows_the_layout(int channels, bool highQuality, int kbps)
     {
         Assert.Equal(kbps, StreamNegotiation.AudioBitrateFor(channels, highQuality));

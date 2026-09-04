@@ -14,6 +14,12 @@ internal sealed class ConfFile
     private readonly Dictionary<string, Dictionary<string, string>> _sections =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Keys asked for and not found, in order — settings added since the file was last written,
+    // not ones left blank on purpose. Read() asks for all of them, so this ends up the whole gap.
+    private readonly List<(string Section, string Key)> _missing = new();
+
+    internal IReadOnlyList<(string Section, string Key)> MissingKeys => _missing;
+
     internal static ConfFile Parse(string text)
     {
         var file = new ConfFile();
@@ -68,10 +74,14 @@ internal sealed class ConfFile
     internal bool Has(string section, string key) =>
         _sections.TryGetValue(section, out var values) && values.ContainsKey(key);
 
-    private string? Raw(string section, string key) =>
-        _sections.TryGetValue(section, out var values) && values.TryGetValue(key, out var value)
-            ? value
-            : null;
+    private string? Raw(string section, string key)
+    {
+        if (_sections.TryGetValue(section, out var values) && values.TryGetValue(key, out var value))
+            return value;
+
+        _missing.Add((section, key));
+        return null;
+    }
 
     internal string Text(string section, string key, string fallback) =>
         Raw(section, key) is { Length: > 0 } value ? value : fallback;

@@ -1,19 +1,17 @@
 //  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
-using System.ComponentModel;
 using RemoteGameHub.App;
 
 namespace RemoteGameHub.Session;
 
 // The controllers the client brings with it, presented to this machine as real ones: plugged in
-// when the client first reports one, unplugged when it goes, so the machine is left as it was.
+// when first reported, unplugged when gone. Driven by whichever bus this machine has — see Open.
 internal sealed class GamepadHub : IDisposable
 {
-    // The identifiers of a Microsoft Xbox 360 wired pad. Games look at these to decide which
-    // glyphs to draw, so imitating a real one is "A" rather than "Button 1".
-    private const ushort VendorMicrosoft = 0x045E;
-    private const ushort ProductXbox360Wired = 0x028E;
+    // How many controllers Moonlight itself ever asks about: activeGamepadMask is one bit per
+    // pad and the client numbers them 0 to 3.
+    internal const int MaxPads = 4;
 
     // How long a feedback request waits before being asked again. It exists so that a pad being
     // unplugged is noticed promptly; rumble arriving meanwhile completes the request at once.
@@ -21,7 +19,7 @@ internal sealed class GamepadHub : IDisposable
 
     private sealed class Pad
     {
-        internal uint Serial;
+        internal IGamepadTarget? Target;
         internal Thread? Feedback;
         internal volatile bool Stopping;
         internal GamepadState Last = GamepadState.Released;
@@ -32,8 +30,12 @@ internal sealed class GamepadHub : IDisposable
     }
 
     private readonly object _gate = new();
-    private readonly Pad?[] _pads = new Pad?[ViGEmBus.MaxTargets];
-    private readonly ViGEmBus? _bus;
+    private readonly Pad?[] _pads = new Pad?[MaxPads];
+    private readonly IGamepadBus? _bus;
+
+    // What the client last said about the pad in each slot — ControllerArrived precedes any
+    // state for it, so this is always set by the time a slot's first Update plugs it in.
+    private readonly GamepadKind[] _kinds = new GamepadKind[MaxPads];
 
     private bool _disposed;
 
@@ -41,18 +43,27 @@ internal sealed class GamepadHub : IDisposable
     // client, which is the only place that can actually shake anything.
     internal event Action<GamepadFeedback>? Feedback;
 
-    // false when the bus is absent: the caller then ignores controller packets.
+    // false when no bus is available: the caller then ignores controller packets.
     internal bool IsAvailable => _bus is not null;
 
-    // Which driver is presenting the pads, for the page and the log. Named rather than assumed:
-    // ViGEmBus is the only one this server speaks to today and will not be the only one for ever.
-    internal string Driver => _bus is not null ? "ViGEmBus" : "none";
+    // Which driver is presenting the pads, for the page and the log.
+    internal string Driver => _bus?.Name ?? "none";
 
-    private GamepadHub(ViGEmBus? bus) => _bus = bus;
+    private GamepadHub(IGamepadBus? bus) => _bus = bus;
 
-    // Opens whatever controller bus this machine has, at startup, so its absence is known then and
-    // not mid-game. No setting: an installed driver was installed on purpose. Always returns a hub.
-    internal static GamepadHub Open() => new(ViGEmBus.Open());
+    // Opens whatever controller bus this machine has, at startup.
+    internal static GamepadHub Open()
+    {
+        IGamepadBus? bus = ViGEmGamepadBus.Open();
+        return new GamepadHub(bus);
+    }
+
+    // Harmless to call after the slot is already plugged in: only the next reconnection uses it.
+    internal void SetKind(int index, GamepadKind kind)
+    {
+        if (index < 0 || index >= _kinds.Length) return;
+        _kinds[index] = kind;
+    }
 
     // Reports the state of one controller, plugging it in if this is the first time it is seen.
     // Indices are the client's own numbering, zero to three.
@@ -82,11 +93,11 @@ internal sealed class GamepadHub : IDisposable
 
         try
         {
-            _bus.Submit(pad.Serial, state.ToReport());
+            pad.Target!.Submit(state);
         }
-        catch (Win32Exception error)
+        catch (Exception error)
         {
-            Log.Warn($"controller {index} stopped accepting reports ({error.NativeErrorCode}); " +
+            Log.Warn($"controller {index} stopped accepting reports ({error.Message}); " +
                      "unplugging it. It will be plugged in again if the client reports it.");
             Remove(index);
         }
@@ -107,10 +118,12 @@ internal sealed class GamepadHub : IDisposable
 
     private Pad? PlugIn(int index)
     {
-        uint? serial;
+        var kind = _kinds[index];
+
+        IGamepadTarget? target;
         try
         {
-            serial = _bus!.PlugIn(VendorMicrosoft, ProductXbox360Wired);
+            target = _bus!.PlugIn(index, kind);
         }
         catch (Exception error)
         {
@@ -118,14 +131,9 @@ internal sealed class GamepadHub : IDisposable
             return null;
         }
 
-        if (serial is null)
-        {
-            Log.Warn($"the virtual controller bus has no free slot for controller {index}. " +
-                     "Another program using ViGEm is probably holding them.");
-            return null;
-        }
+        if (target is null) return null;
 
-        var pad = new Pad { Serial = serial.Value };
+        var pad = new Pad { Target = target };
         _pads[index] = pad;
 
         pad.Feedback = new Thread(() => WatchFeedback(index, pad))
@@ -135,7 +143,8 @@ internal sealed class GamepadHub : IDisposable
         };
         pad.Feedback.Start();
 
-        Log.Info($"controller {index} plugged in as an Xbox 360 pad (bus slot {serial.Value})");
+        Log.Info($"controller {index} plugged in through {_bus!.Name} as " +
+                 (kind == GamepadKind.PlayStation ? "a PlayStation pad" : "an Xbox pad"));
         return pad;
     }
 
@@ -156,7 +165,7 @@ internal sealed class GamepadHub : IDisposable
         // ERROR_OPERATION_ABORTED and lets its thread end.
         try
         {
-            _bus!.Unplug(pad.Serial);
+            pad.Target?.Dispose();
         }
         catch (Exception error)
         {
@@ -174,8 +183,8 @@ internal sealed class GamepadHub : IDisposable
         {
             try
             {
-                if (!_bus!.WaitForFeedback(pad.Serial, FeedbackPollMs,
-                                           out var large, out var small, out var led))
+                if (!pad.Target!.WaitForFeedback(FeedbackPollMs, out var large, out var small,
+                                                 out var led))
                 {
                     continue;
                 }

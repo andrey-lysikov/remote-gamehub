@@ -24,12 +24,17 @@ internal sealed class ViGEmBus : IDisposable
     private const uint IOCTL_VIGEM_WAIT_DEVICE_READY = 0x2AA010;    // function 0x804, write
     private const uint IOCTL_XUSB_REQUEST_NOTIFICATION = 0x2AE804;  // function 0xA01, read+write
     private const uint IOCTL_XUSB_SUBMIT_REPORT = 0x2AA808;         // function 0xA02, write
+    private const uint IOCTL_DS4_SUBMIT_REPORT = 0x2AA80C;          // function 0xA03, write
 
     // The protocol version this client speaks. The bus refuses anything else.
     private const uint CommonVersion = 0x0001;
 
     // Xbox 360 wired. The one every Windows game understands without a driver of its own.
     private const uint TargetTypeXbox360Wired = 0;
+
+    // DualShock 4 wired — ViGEm/Common.h's VIGEM_TARGET_TYPE enum: Xbox360Wired = 0,
+    // DualShock4Wired = 2 (verified against the real header; this client speaks only these two).
+    private const uint TargetTypeDualShock4Wired = 2;
 
     // The bus allocates by serial number, and this is as many as it holds.
     internal const int MaxTargets = 4;
@@ -74,6 +79,14 @@ internal sealed class ViGEmBus : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct SubmitDs4Report
+    {
+        internal uint Size;
+        internal uint SerialNo;
+        internal Ds4Report Report;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct RequestNotification
     {
         internal uint Size;
@@ -95,6 +108,21 @@ internal sealed class ViGEmBus : IDisposable
         internal short ThumbLY;
         internal short ThumbRX;
         internal short ThumbRY;
+    }
+
+    // ViGEm/Common.h's DS4_REPORT: unsigned 0-255 sticks centred on 0x80. Buttons packs an
+    // eight-way D-pad hat in its low nibble; Special (PS/touchpad-click) is left zero — unverified.
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Ds4Report
+    {
+        internal byte ThumbLX;
+        internal byte ThumbLY;
+        internal byte ThumbRX;
+        internal byte ThumbRY;
+        internal ushort Buttons;
+        internal byte Special;
+        internal byte TriggerL;
+        internal byte TriggerR;
     }
 
     private readonly SafeFileHandle _bus;
@@ -215,9 +243,17 @@ internal sealed class ViGEmBus : IDisposable
         return false;
     }
 
-    // Plugs in one Xbox 360 controller and returns the serial the bus gave it. The serial is
-    // claimed here, not by the driver: another program using ViGEm holds its own, so walk the range.
-    internal unsafe uint? PlugIn(ushort vendorId, ushort productId)
+    // Plugs in one Xbox 360 controller and returns the serial the bus gave it.
+    internal uint? PlugIn(ushort vendorId, ushort productId) =>
+        PlugIn(vendorId, productId, TargetTypeXbox360Wired);
+
+    // Plugs in one DualShock 4 controller instead — see Ds4Report and SubmitDs4.
+    internal uint? PlugInDs4(ushort vendorId, ushort productId) =>
+        PlugIn(vendorId, productId, TargetTypeDualShock4Wired);
+
+    // The serial is claimed here, not by the driver: another program using ViGEm holds its own,
+    // so walk the range regardless of which kind of pad this one is.
+    private unsafe uint? PlugIn(ushort vendorId, ushort productId, uint targetType)
     {
         for (uint serial = 1; serial <= MaxTargets; serial++)
         {
@@ -225,7 +261,7 @@ internal sealed class ViGEmBus : IDisposable
             {
                 Size = (uint)sizeof(PluginTarget),
                 SerialNo = serial,
-                TargetType = TargetTypeXbox360Wired,
+                TargetType = targetType,
                 VendorId = vendorId,
                 ProductId = productId,
             };
@@ -301,6 +337,18 @@ internal sealed class ViGEmBus : IDisposable
         };
 
         Kernel32.Control(_bus, IOCTL_XUSB_SUBMIT_REPORT, &request, sizeof(SubmitReport), null, 0, out _);
+    }
+
+    internal unsafe void SubmitDs4(uint serial, in Ds4Report report)
+    {
+        var request = new SubmitDs4Report
+        {
+            Size = (uint)sizeof(SubmitDs4Report),
+            SerialNo = serial,
+            Report = report,
+        };
+
+        Kernel32.Control(_bus, IOCTL_DS4_SUBMIT_REPORT, &request, sizeof(SubmitDs4Report), null, 0, out _);
     }
 
     // Waits for the guest to set the rumble motors or the player light of one pad, and returns

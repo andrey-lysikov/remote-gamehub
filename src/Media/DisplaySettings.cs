@@ -1,6 +1,7 @@
 ﻿//  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using RemoteGameHub.App;
@@ -366,34 +367,48 @@ internal sealed class DisplayAdaptation : IDisposable
         if (_restored) return;
         _restored = true;
 
+        // Timed per step, not only as a whole: a slow restore is a mode change, an HDR toggle or
+        // a DPI change taking its own time with the display driver, and the log should say which.
+        var whole = Stopwatch.StartNew();
+
         try
         {
             if (_previousHdr is { } hdr)
             {
+                var step = Stopwatch.StartNew();
                 var path = FindPath(_deviceName);
                 if (path is not null) DisplayControl.SetColourState(path.Value, hdr);
+                Log.Info($"HDR restored in {step.ElapsedMilliseconds} ms");
             }
 
             if (_previousScale is { } scale)
             {
+                var step = Stopwatch.StartNew();
                 var path = FindPath(_deviceName);
                 if (path is not null && DisplayControl.SetDpiScale(path.Value, scale))
-                    Log.Info($"the desktop is scaled back to {scale}%");
+                    Log.Info($"the desktop is scaled back to {scale}% in {step.ElapsedMilliseconds} ms");
                 else
-                    Log.Warn($"the desktop could not be scaled back to {scale}%");
+                    Log.Warn($"the desktop could not be scaled back to {scale}% " +
+                             $"({step.ElapsedMilliseconds} ms)");
             }
 
             if (_previousMode is not null)
             {
+                var step = Stopwatch.StartNew();
                 if (Set(_deviceName, _previousMode))
-                    Log.Event($"the screen is back to {_previousMode}");
+                    Log.Event($"the screen is back to {_previousMode} in {step.ElapsedMilliseconds} ms");
                 else
-                    Log.Warn($"the screen could not be put back to {_previousMode}");
+                    Log.Warn($"the screen could not be put back to {_previousMode} " +
+                             $"({step.ElapsedMilliseconds} ms)");
             }
         }
         catch (Exception error)
         {
-            Log.Warn($"the screen could not be restored: {error.Message}");
+            Log.Warn($"the screen could not be restored: {error.Message} " +
+                     $"({whole.ElapsedMilliseconds} ms)");
         }
+
+        if (whole.ElapsedMilliseconds > 500)
+            Log.Warn($"restoring the screen took {whole.ElapsedMilliseconds} ms in total");
     }
 }

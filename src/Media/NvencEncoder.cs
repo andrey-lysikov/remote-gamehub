@@ -79,13 +79,13 @@ internal sealed unsafe class NvencEncoder : IVideoEncoder
 
         if (codec == VideoCodec.Auto) codec = VideoCodec.H264;
 
-        // Ten bits are sent in HEVC and nothing else here, so asking for high dynamic range in
-        // another codec is a mistake worth naming rather than silently ignoring.
-        if (hdr && codec != VideoCodec.Hevc)
+        // Ten bits are sent in HEVC and AV1 and nothing else here, so asking for high dynamic
+        // range in H.264 is a mistake worth naming rather than silently ignoring.
+        if (hdr && codec != VideoCodec.Hevc && codec != VideoCodec.Av1)
         {
             throw new InvalidOperationException(
-                $"high dynamic range needs HEVC; {VideoEncoders.Name(codec)} is not sent in ten " +
-                "bits by this server.");
+                $"high dynamic range needs HEVC or AV1; {VideoEncoders.Name(codec)} is not sent " +
+                "in ten bits by this server.");
         }
 
         var encoder = new NvencEncoder(api, codec, width, height, hdr, fullRange, yuv444, quality);
@@ -142,10 +142,12 @@ internal sealed unsafe class NvencEncoder : IVideoEncoder
 
         var config = preset.Preset;
         config.ProfileGuid =
+            // AV1 has one profile for both eight and ten bits — the bit depth is config fields
+            // below, not a different profile — so this must be checked before _hdr picks HEVC's.
+            Codec == VideoCodec.Av1 ? NvEnc.ProfileAv1Main :
             _hdr ? NvEnc.ProfileHevcMain10 :
             _yuv444 && Codec == VideoCodec.Hevc ? NvEnc.ProfileHevcFrext :
-            _yuv444 ? NvEnc.ProfileH264High444 :
-            Codec == VideoCodec.Av1 ? NvEnc.ProfileAv1Main : NvEnc.ProfileAutoselect;
+            _yuv444 ? NvEnc.ProfileH264High444 : NvEnc.ProfileAutoselect;
         config.GopLength = NvEnc.InfiniteGopLength;
         config.FrameIntervalP = 1;   // IPPP…: a B frame is a frame held back, which is latency
 
@@ -176,9 +178,24 @@ internal sealed unsafe class NvencEncoder : IVideoEncoder
         if (Codec == VideoCodec.Av1)
         {
             // The sequence header goes out with every key frame, so a client recovering from a loss
-            // can decode the next. Nothing else in the AV1 union is touched; the preset has it right.
+            // can decode the next.
             config.Av1IdrPeriod = NvEnc.InfiniteGopLength;
             config.Av1Flags |= NvEnc.Av1FlagRepeatSeqHdr;
+
+            // Ten bits, input and output alike: the same P010 texture a ten-bit HEVC session gets.
+            // 4:4:4 is not supported for AV1 by this card, so chromaFormatIDC is left as preset.
+            config.Av1OutputBitDepth = _hdr ? NvEnc.Av1BitDepth10 : NvEnc.Av1BitDepth8;
+            config.Av1InputBitDepth = _hdr ? NvEnc.Av1BitDepth10 : NvEnc.Av1BitDepth8;
+
+            // What the picture is, said in the stream itself. Without it a client has ten-bit
+            // samples and no idea they are BT.2020 PQ, and shows them as washed-out Rec. 709.
+            if (_hdr)
+            {
+                config.Av1ColourPrimaries = NvEnc.ColourPrimariesBt2020;
+                config.Av1TransferCharacteristics = NvEnc.TransferCharacteristicSmpte2084;
+                config.Av1MatrixCoefficients = NvEnc.ColourMatrixBt2020Ncl;
+                config.Av1ColorRange = _fullRange ? 1u : 0u;
+            }
         }
         else if (Codec == VideoCodec.Hevc)
         {

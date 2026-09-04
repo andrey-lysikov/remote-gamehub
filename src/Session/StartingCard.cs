@@ -1,6 +1,7 @@
 //  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -11,20 +12,40 @@ using RemoteGameHub.Native;
 
 namespace RemoteGameHub.Session;
 
-// What the client sees while a game is still loading: its picture and its name, drawn once into a
-// texture and handed to the encoder in place of the desktop, so only the client ever sees it.
+// What the client sees while a game is still loading, handed to the encoder in place of the
+// desktop. Redrawn now and then rather than once, so the spinner under the caption turns.
 internal sealed unsafe class StartingCard : IDisposable
 {
+    // How often the card is redrawn for the spinner's sake. Fast enough to look like it is
+    // turning, slow enough that redrawing the whole picture is not real work.
+    private static readonly TimeSpan RedrawEvery = TimeSpan.FromMilliseconds(66);
+
     private void* _texture;
     private void* _staging;
+    private readonly void* _context;
+    private readonly int _width;
+    private readonly int _height;
+    private readonly uint _format;
+    private readonly string _title;
+    private readonly string? _posterPath;
+
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private TimeSpan _lastRedraw = TimeSpan.MinValue;
 
     // The texture to encode instead of the desktop. Owned here; do not release it.
     internal nint Texture => (nint)_texture;
 
-    private StartingCard(void* texture, void* staging)
+    private StartingCard(void* texture, void* staging, void* context, int width, int height,
+                         uint format, string title, string? posterPath)
     {
         _texture = texture;
         _staging = staging;
+        _context = context;
+        _width = width;
+        _height = height;
+        _format = format;
+        _title = title;
+        _posterPath = posterPath;
     }
 
     // Draws the card and puts it on the graphics card. Returns null rather than throwing: a
@@ -33,7 +54,7 @@ internal sealed unsafe class StartingCard : IDisposable
                                          uint format, string title, string? posterPath)
     {
         if (format != Dxgi.DXGI_FORMAT_B8G8R8A8_UNORM &&
-            format != Dxgi.DXGI_FORMAT_R10G10B10A2_UNORM)
+            format != Dxgi.DXGI_FORMAT_R16G16B16A16_FLOAT)
         {
             // A format this drawing cannot fill is a desktop shown a little early, not an error.
             Log.Info("the stream is in a format the starting card cannot be drawn in; " +
@@ -46,7 +67,7 @@ internal sealed unsafe class StartingCard : IDisposable
 
         try
         {
-            using var picture = Draw(width, height, title, posterPath);
+            using var picture = Draw(width, height, title, posterPath, 0);
 
             var description = new D3D11Texture2DDesc
             {
@@ -77,7 +98,8 @@ internal sealed unsafe class StartingCard : IDisposable
             Log.Info($"the client is shown a starting card for \"{title}\"" +
                      (posterPath is null ? " (no picture for it yet)" : string.Empty));
 
-            var card = new StartingCard(texture, staging);
+            var card = new StartingCard(texture, staging, (void*)context, width, height, format,
+                title, posterPath);
             texture = null;
             staging = null;
             return card;
@@ -91,9 +113,30 @@ internal sealed unsafe class StartingCard : IDisposable
         }
     }
 
+    // Redraws at RedrawEvery's own pace regardless of how often this is called. Never throws: a
+    // spinner that stops turning is not a reason to lose the picture behind it.
+    internal void Update()
+    {
+        var now = _clock.Elapsed;
+        if (_lastRedraw != TimeSpan.MinValue && now - _lastRedraw < RedrawEvery) return;
+        _lastRedraw = now;
+
+        try
+        {
+            using var picture = Draw(_width, _height, _title, _posterPath,
+                (float)(now.TotalMilliseconds % 1500 / 1500 * 360));
+            Upload(_context, _staging, _texture, picture, _width, _height, _format);
+        }
+        catch (Exception error)
+        {
+            Log.Info($"the starting card could not be redrawn: {error.Message}");
+        }
+    }
+
     // ------------------------------------------------------------------ the drawing
 
-    private static Bitmap Draw(int width, int height, string title, string? posterPath)
+    private static Bitmap Draw(int width, int height, string title, string? posterPath,
+                               float spinnerAngle)
     {
         var dark = ThemeIcons.AppsAreDark();
         var background = BackgroundOf(dark);
@@ -132,9 +175,32 @@ internal sealed unsafe class StartingCard : IDisposable
                 width * 3 / 4, (int)(height * 0.2));
 
             canvas.DrawString($"Starting {title}", font, brush, caption, format);
+
+            // Under the text itself, not under the whole (much taller) box it is aligned to the
+            // top of: LineAlignment.Near leaves most of caption's own height empty below it.
+            var textBottom = caption.Top + (int)font.GetHeight(canvas);
+            DrawSpinner(canvas, width, textBottom + (int)(height * 0.025), height, foreground,
+                spinnerAngle);
         }
 
         return picture;
+    }
+
+    // Windows' own indeterminate ring, under the caption, so a game taking its time reads as
+    // loading rather than as this server having stopped.
+    private static void DrawSpinner(Graphics canvas, int width, int top, int height,
+                                    Color foreground, float angle)
+    {
+        var diameter = (int)(height * 0.045);
+        var area = new Rectangle(width / 2 - diameter / 2, top, diameter, diameter);
+
+        using var pen = new Pen(foreground, Math.Max(2f, diameter * 0.12f))
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+        };
+
+        canvas.DrawArc(pen, area, angle, 100f);
     }
 
     // The game's own picture when there is one, and a lettered tile when there is not — which
@@ -250,7 +316,7 @@ internal sealed unsafe class StartingCard : IDisposable
                 }
                 else
                 {
-                    ConvertToHdr10(locked, mapped, width, height);
+                    ConvertToScRgb(locked, mapped, width, height);
                 }
             }
             finally
@@ -266,14 +332,15 @@ internal sealed unsafe class StartingCard : IDisposable
         D3D11.CopyResource(context, texture, staging);
     }
 
-    // ------------------------------------------------------------------ the ten-bit form
+    // ------------------------------------------------------------------ the HDR form
 
-    // The card as a high-dynamic-range stream expects it: BT.2020 primaries, the ST 2084 curve,
-    // ten bits each. The published arithmetic, on the processor because the card is drawn once.
-    private static void ConvertToHdr10(BitmapData source, D3D11MappedSubresource destination,
+    // The card in the same linear scRGB half floats DXGI hands back for an HDR desktop, so
+    // ColourConverter turns it into ten-bit BT.2020 PQ exactly as it would a real captured frame.
+    private static void ConvertToScRgb(BitmapData source, D3D11MappedSubresource destination,
                                        int width, int height)
     {
-        // sRGB byte to linear light, exact, all 256 cases.
+        // sRGB byte to linear light, exact, all 256 cases. scRGB's 1.0 is the same eighty-nit
+        // white the drawing was made against, so nothing here is scaled beyond [0,1].
         var toLinear = new float[256];
         for (var i = 0; i < 256; i++)
         {
@@ -281,47 +348,19 @@ internal sealed unsafe class StartingCard : IDisposable
             toLinear[i] = c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
         }
 
-        // Linear light to the ST 2084 curve, through a table rather than three powers per pixel.
-        // The input is scaled so the card's white lands at 80 cd/m² of the curve's 10000.
-        const float m1 = 0.1593017578125f;
-        const float m2 = 78.84375f;
-        const float c1 = 0.8359375f;
-        const float c2 = 18.8515625f;
-        const float c3 = 18.6875f;
-
-        var toPq = new ushort[4096];
-        for (var i = 0; i < toPq.Length; i++)
-        {
-            var y = i / (float)(toPq.Length - 1) * (80f / 10000f);
-            var p = MathF.Pow(y, m1);
-            var pq = MathF.Pow((c1 + c2 * p) / (1f + c3 * p), m2);
-            toPq[i] = (ushort)MathF.Round(pq * 1023f);
-        }
-
         for (var y = 0; y < height; y++)
         {
             var row = (byte*)source.Scan0 + (long)y * source.Stride;
-            var target = (uint*)((byte*)destination.Data + (long)y * destination.RowPitch);
+            var target = (Half*)((byte*)destination.Data + (long)y * destination.RowPitch);
 
             for (var x = 0; x < width; x++)
             {
-                var b = toLinear[row[x * 4 + 0]];
-                var g = toLinear[row[x * 4 + 1]];
-                var r = toLinear[row[x * 4 + 2]];
-
-                // BT.709 primaries into BT.2020, the published matrix. Inputs in [0,1] stay in
-                // [0,1]: the wider gamut contains the narrower one whole.
-                var r2 = 0.6274040f * r + 0.3292820f * g + 0.0433136f * b;
-                var g2 = 0.0690970f * r + 0.9195400f * g + 0.0113612f * b;
-                var b2 = 0.0163916f * r + 0.0880132f * g + 0.8955950f * b;
-
-                var scale = toPq.Length - 1;
-                var rq = (uint)toPq[(int)(Math.Clamp(r2, 0f, 1f) * scale)];
-                var gq = (uint)toPq[(int)(Math.Clamp(g2, 0f, 1f) * scale)];
-                var bq = (uint)toPq[(int)(Math.Clamp(b2, 0f, 1f) * scale)];
-
-                // R10G10B10A2: red in the lowest bits, alpha in the top two.
-                target[x] = rq | (gq << 10) | (bq << 20) | (3u << 30);
+                // Format32bppArgb in memory is blue, green, red, alpha; R16G16B16A16_FLOAT wants
+                // red first, so the channels are reordered here rather than by the caller.
+                target[x * 4 + 0] = (Half)toLinear[row[x * 4 + 2]];
+                target[x * 4 + 1] = (Half)toLinear[row[x * 4 + 1]];
+                target[x * 4 + 2] = (Half)toLinear[row[x * 4 + 0]];
+                target[x * 4 + 3] = (Half)(row[x * 4 + 3] / 255f);
             }
         }
     }

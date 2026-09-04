@@ -30,6 +30,20 @@ public class ConfFileTests
     }
 
     [Fact]
+    public void Every_key_asked_for_and_not_found_is_reported_once()
+    {
+        var file = ConfFile.Parse("[General]\nHostName = living-room\n");
+
+        file.Text("General", "HostName", "x");     // present: not a gap
+        file.Bool("General", "Debug", false);      // absent: a gap
+        file.Number("Network", "PortBase", 47989, 1, 65535);   // absent, new section: a gap
+
+        Assert.Equal(
+            new[] { ("General", "Debug"), ("Network", "PortBase") },
+            file.MissingKeys);
+    }
+
+    [Fact]
     public void An_empty_value_keeps_the_default_except_for_lists()
     {
         var file = ConfFile.Parse("[Games]\nFolders =\nDepth =\n");

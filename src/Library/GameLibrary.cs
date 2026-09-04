@@ -23,7 +23,7 @@ internal sealed record ArtworkCandidate(long Id, string Source, string? External
 
 // Everything needed to start one game and to recognise it afterwards.
 internal sealed record LaunchTarget(string Command, string? InstallPath, string Title,
-                                    bool Pointer, StreamQuality Quality);
+                                    bool Pointer, StreamQuality Quality, bool ShowCard);
 
 // The games this machine has, as of the last scan: once at every start, after preflight, and again
 // only when somebody asks for it. Between scans the database is truth.
@@ -384,7 +384,7 @@ internal sealed class GameLibrary
     // when there is none: the page hangs it on the cover's address so a new one is fetched.
     internal sealed record GameDetail(long Id, string Source, string Title, string LaunchCommand,
                                       string? InstallPath, long ArtStamp, bool Manual, bool ArtManual,
-                                      bool Pointer, StreamQuality Quality);
+                                      bool Pointer, StreamQuality Quality, bool ShowCard);
 
     internal IReadOnlyList<GameDetail> Details()
     {
@@ -394,7 +394,7 @@ internal sealed class GameLibrary
         {
             using var command = _database.Command(
                 "SELECT id, source, title, launch_command, install_path, box_art_path, manual, " +
-                "art_manual, pointer, quality FROM games WHERE removed_at IS NULL " +
+                "art_manual, pointer, quality, starting_card FROM games WHERE removed_at IS NULL " +
                 "ORDER BY title COLLATE NOCASE;");
 
             using var reader = command.ExecuteReader();
@@ -410,7 +410,8 @@ internal sealed class GameLibrary
                     reader.GetInt64(6) != 0,
                     reader.GetInt64(7) != 0,
                     reader.GetInt64(8) != 0,
-                    Quality(reader.GetInt64(9))));
+                    Quality(reader.GetInt64(9)),
+                    reader.GetInt64(10) != 0));
             }
         }
 
@@ -514,6 +515,41 @@ internal sealed class GameLibrary
         return path is not null && File.Exists(path) ? path : null;
     }
 
+    // A cover the database still points to but that is gone from disk (the folder cleared by
+    // hand) is forgotten here, so NeedingArtwork offers the game a picture again.
+    internal int ForgetMissingArtwork()
+    {
+        var missing = new List<long>();
+
+        lock (_database.Gate)
+        {
+            using (var select = _database.Command(
+                       "SELECT id, box_art_path FROM games " +
+                       "WHERE box_art_path IS NOT NULL AND removed_at IS NULL;"))
+            {
+                using var reader = select.ExecuteReader();
+                while (reader.Read())
+                {
+                    if (!File.Exists(reader.GetString(1))) missing.Add(reader.GetInt64(0));
+                }
+            }
+
+            if (missing.Count == 0) return 0;
+
+            using var update = _database.Command(
+                "UPDATE games SET box_art_path = NULL, art_checked_at = NULL WHERE id = $id;");
+            var id = update.Parameters.Add("$id", Microsoft.Data.Sqlite.SqliteType.Integer);
+
+            foreach (var gameId in missing)
+            {
+                id.Value = gameId;
+                update.ExecuteNonQuery();
+            }
+        }
+
+        return missing.Count;
+    }
+
     // The games with no picture to show and not looked up recently. The artwork worker takes this
     // list once, after the listeners are open, and works through it in the background.
     internal IReadOnlyList<ArtworkCandidate> NeedingArtwork(TimeSpan retryAfter)
@@ -595,6 +631,20 @@ internal sealed class GameLibrary
         }
     }
 
+    // Whether the starting card is shown for this game while it loads. On by default; the switch
+    // exists for the odd game a static card in front of it confuses.
+    internal void RecordShowCard(long gameId, bool wanted)
+    {
+        lock (_database.Gate)
+        {
+            using var command = _database.Command(
+                "UPDATE games SET starting_card = $card WHERE id = $id;");
+            command.Parameters.AddWithValue("$card", wanted ? 1 : 0);
+            command.Parameters.AddWithValue("$id", gameId);
+            command.ExecuteNonQuery();
+        }
+    }
+
     // How much work the encoder puts into this game. Anything the database does not recognise is
     // High, which is where every game starts.
     internal void RecordQuality(long gameId, StreamQuality quality)
@@ -621,8 +671,8 @@ internal sealed class GameLibrary
         lock (_database.Gate)
         {
             using var command = _database.Command(
-                "SELECT launch_command, install_path, title, pointer, quality FROM games " +
-                "WHERE id = $id AND removed_at IS NULL;");
+                "SELECT launch_command, install_path, title, pointer, quality, starting_card " +
+                "FROM games WHERE id = $id AND removed_at IS NULL;");
             command.Parameters.AddWithValue("$id", gameId);
 
             using var reader = command.ExecuteReader();
@@ -633,7 +683,8 @@ internal sealed class GameLibrary
                 reader.IsDBNull(1) ? null : reader.GetString(1),
                 reader.GetString(2),
                 reader.GetInt64(3) != 0,
-                Quality(reader.GetInt64(4)));
+                Quality(reader.GetInt64(4)),
+                reader.GetInt64(5) != 0);
         }
     }
 

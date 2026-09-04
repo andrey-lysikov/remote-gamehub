@@ -70,7 +70,8 @@ internal static class Program
                 Log.Info(probed.Refusal is null
                     ? $"encoder test: {probed.Encoder} opened on adapter {card.Index} " +
                       $"\"{card.Name}\" — H.264 {(probed.H264 ? "yes" : "no")}, " +
-                      $"HEVC {(probed.Hevc ? "yes" : "no")}, HDR {(probed.Hdr ? "yes" : "no")}"
+                      $"HEVC {(probed.Hevc ? "yes" : "no")} (HDR {(probed.Hdr ? "yes" : "no")}), " +
+                      $"AV1 {(probed.Av1 ? "yes" : "no")} (HDR {(probed.Av1Hdr ? "yes" : "no")})"
                     : $"encoder test: nothing opened.\n{probed.Refusal}");
 
                 return probed.CanStream ? 0 : 1;
@@ -162,6 +163,18 @@ internal static class Program
     {
         var config = preflight.Config!;
 
+        // A step above the Normal every game defaults to, so the capture/encode/send thread's own
+        // Highest (see StreamSession.Start) is not just highest among equals with one.
+        try
+        {
+            System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
+                System.Diagnostics.ProcessPriorityClass.AboveNormal;
+        }
+        catch (Exception error)
+        {
+            Log.Info($"the process priority could not be raised: {error.Message}");
+        }
+
         using var tray = new TrayIcon();
         tray.SetState("starting");
 
@@ -245,7 +258,7 @@ internal static class Program
 
         // What each playback device mixes into, once: it is the answer to "why is there no
         // surround", and it changes only when a person changes it in Windows.
-        if (config.AudioEnabled) AudioEndpoints.ListToLog();
+        if (AppParameters.Audio.Enabled) AudioEndpoints.ListToLog();
 
         GameStreamServer? server = null;
         RtspServer? rtsp = null;

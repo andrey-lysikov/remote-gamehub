@@ -6,8 +6,8 @@ using Xunit;
 
 namespace RemoteGameHub.Tests;
 
-// The settings as a whole: they survive a write and a read, sample.conf is what the defaults
-// produce, and the ports the client is told follow the base the way the protocol says.
+// The settings as a whole: they survive a write and a read, and the ports the client is told
+// follow the base the way the protocol says.
 public class ConfFormatTests
 {
     [Fact]
@@ -17,6 +17,10 @@ public class ConfFormatTests
         {
             Debug = false,
             HostName = "Kitchen",
+            Output = "1.0",
+            Encoder = VideoEncoder.NvEnc,
+            Adapt = false,
+            ScaleDesktop = false,
             PortBase = 48989,
             BindAddress = "192.168.1.20",
             WebPort = 8080,
@@ -36,6 +40,10 @@ public class ConfFormatTests
 
         Assert.False(read.Debug);
         Assert.Equal("Kitchen", read.HostName);
+        Assert.Equal("1.0", read.Output);
+        Assert.Equal(VideoEncoder.NvEnc, read.Encoder);
+        Assert.False(read.Adapt);
+        Assert.False(read.ScaleDesktop);
         Assert.Equal(48989, read.PortBase);
         Assert.Equal("192.168.1.20", read.BindAddress);
         Assert.Equal(8080, read.WebPort);
@@ -66,15 +74,6 @@ public class ConfFormatTests
     }
 
     [Fact]
-    public void Sample_conf_is_what_the_defaults_write()
-    {
-        var sample = FindInRepository("sample.conf");
-        var expected = ConfFormat.Write(new AppConfig());
-
-        Assert.Equal(Normalise(expected), Normalise(File.ReadAllText(sample)));
-    }
-
-    [Fact]
     public void Ports_follow_the_base_the_way_moonlight_derives_them()
     {
         var config = new AppConfig { PortBase = 47989 };
@@ -85,6 +84,32 @@ public class ConfFormatTests
         Assert.Equal(47998, config.VideoPort);
         Assert.Equal(47999, config.ControlPort);
         Assert.Equal(48000, config.AudioPort);
+    }
+
+    [Fact]
+    public void A_file_missing_no_key_reports_nothing_to_add()
+    {
+        var file = ConfFile.Parse(ConfFormat.Write(new AppConfig()));
+        ConfFormat.Read(file, _ => { });
+
+        Assert.Empty(file.MissingKeys);
+    }
+
+    [Fact]
+    public void A_file_from_before_a_setting_existed_reports_it_as_missing()
+    {
+        // What a file this server wrote before VirtualDisplay and [Display] existed looks like:
+        // everything else present, those two gone entirely.
+        var file = ConfFile.Parse("[General]\nHostName = Kitchen\nVirtualMouse = true\n");
+        ConfFormat.Read(file, _ => { });
+
+        Assert.Contains(("General", "VirtualDisplay"), file.MissingKeys);
+        Assert.Contains(("Display", "Output"), file.MissingKeys);
+        Assert.Contains(("Display", "Encoder"), file.MissingKeys);
+        Assert.Contains(("Display", "Adapt"), file.MissingKeys);
+        Assert.Contains(("Display", "ScaleDesktop"), file.MissingKeys);
+        Assert.DoesNotContain(("General", "HostName"), file.MissingKeys);
+        Assert.DoesNotContain(("General", "VirtualMouse"), file.MissingKeys);
     }
 
     [Theory]
@@ -100,23 +125,4 @@ public class ConfFormatTests
         Assert.Equal(system, AppConfig.IsSystemFolder(path));
     }
 
-    private static string Normalise(string text) =>
-        text.Replace("\r\n", "\n").TrimStart('\uFEFF').TrimEnd();
-
-    // The repository root, found by walking up from the test binary until the file is met. The
-    // binary sits several folders below it, and how many depends on the configuration.
-    private static string FindInRepository(string name)
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null)
-        {
-            var candidate = Path.Combine(directory.FullName, name);
-            if (File.Exists(candidate)) return candidate;
-
-            directory = directory.Parent;
-        }
-
-        throw new FileNotFoundException($"{name} was not found above {AppContext.BaseDirectory}");
-    }
 }

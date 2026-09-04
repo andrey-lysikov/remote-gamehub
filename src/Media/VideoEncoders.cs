@@ -40,12 +40,19 @@ internal sealed record EncoderCapabilities(
     // Whether ten-bit HEVC is available, which is what high dynamic range needs. Only offered to
     // a client when this is true, and only used when the client says it wants it.
     bool Hdr,
+    // The same question for AV1: NVENC only, and only on the cards new enough to have an AV1
+    // encoder at all. AMF is not asked — there is no AMD card here to check it against.
+    bool Av1Hdr,
     string? Refusal)
 {
     internal bool CanStream => Refusal is null && (H264 || Hevc || Av1);
 
+    // Whether this card can send high dynamic range in some codec, whichever the client and this
+    // card agree on — the one question a refusal message or a status page needs.
+    internal bool AnyHdr => Hdr || Av1Hdr;
+
     internal static EncoderCapabilities Refused(string refusal) =>
-        new(VideoEncoder.Auto, false, false, false, false, false, false, refusal);
+        new(VideoEncoder.Auto, false, false, false, false, false, false, false, refusal);
 }
 
 // The choice and the opening of the encoder. The implementation follows the adapter that owns the
@@ -143,11 +150,18 @@ internal static unsafe class VideoEncoders
                 "cannot encode it.");
         }
 
-        if (hdr && !capabilities.Hdr)
+        var hdrAvailable = codec switch
+        {
+            VideoCodec.Hevc => capabilities.Hdr,
+            VideoCodec.Av1 => capabilities.Av1Hdr,
+            _ => false,
+        };
+
+        if (hdr && !hdrAvailable)
         {
             throw new InvalidOperationException(
-                "high dynamic range was asked for, but the startup probe found no ten-bit " +
-                "encoder on this card.");
+                $"high dynamic range was asked for, but the startup probe found no ten-bit " +
+                $"{Name(codec)} encoder on this card.");
         }
 
         if (yuv444 &&
@@ -217,15 +231,17 @@ internal static unsafe class VideoEncoders
                 if (guids[i] == NvEnc.CodecAv1) av1 = true;
             }
 
-            // Ten bits is asked about only for HEVC, which is the only codec this server sends
-            // high dynamic range in.
+            // Asked per codec: HEVC and AV1 are the two this server can send HDR in, and a card
+            // new enough for one is not necessarily new enough for the other.
             var tenBit = hevc && Supports(api, session, NvEnc.CodecHevc,
+                NvEnc.CapsSupport10BitEncode);
+            var av1TenBit = av1 && Supports(api, session, NvEnc.CodecAv1,
                 NvEnc.CapsSupport10BitEncode);
 
             return new EncoderCapabilities(VideoEncoder.NvEnc, h264, hevc, av1,
                 h264 && Supports(api, session, NvEnc.CodecH264, NvEnc.CapsSupportYuv444Encode),
                 hevc && Supports(api, session, NvEnc.CodecHevc, NvEnc.CapsSupportYuv444Encode),
-                tenBit, null);
+                tenBit, av1TenBit, null);
         }
         finally
         {
@@ -255,9 +271,10 @@ internal static unsafe class VideoEncoders
             var hevc = TryComponent(factory, context, "AMFVideoEncoderHW_HEVC");
             var av1 = TryComponent(factory, context, "AMFVideoEncoderHW_AV1");
 
-            // AMF has a capability interface, but reading it is another set of vtables for one
-            // boolean. Every part that encodes HEVC does ten bits, and none of them do 4:4:4.
-            return new EncoderCapabilities(VideoEncoder.Amf, h264, hevc, av1, false, false, hevc, null);
+            // Every part that encodes HEVC does ten bits, none do 4:4:4, and AV1 in ten bits is
+            // not offered: nothing has checked it against real AMD hardware, unlike HEVC above.
+            return new EncoderCapabilities(VideoEncoder.Amf, h264, hevc, av1, false, false, hevc,
+                false, null);
         }
         finally
         {

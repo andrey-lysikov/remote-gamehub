@@ -58,10 +58,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
     private void* _composed;
     private void* _composedSurface;
 
-    // The pointer, drawn by GDI onto a texture of its own rather than into a copy of the frame:
-    // half floats are not a format GDI can touch, so this is always eight-bit BGRA, full-frame
-    // sized, cleared to nothing before every draw, and read by the colour shader as a second
-    // input. Used for an HDR desktop only; an ordinary one still uses _composed above.
+    // The pointer, drawn by GDI onto its own eight-bit BGRA texture rather than into the frame
+    // (half floats are not a format GDI can touch); used for an HDR desktop only.
     private void* _cursorOverlay;
     private void* _cursorOverlaySurface;
     private void* _cursorOverlayRtv;
@@ -96,9 +94,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
     // numbers when the screen answers nothing, which is every screen that does no HDR.
     internal HdrDisplay Hdr { get; private set; } = HdrDisplay.Rec2020;
 
-    // The texture the encoder reads. For an HDR desktop this is always the raw capture: the
-    // pointer there is composited by the colour shader, from CursorOverlay, not baked in here.
-    // For an ordinary one it is the desktop copy with the pointer drawn into it, when it is.
+    // The texture the encoder reads: the raw capture for an HDR desktop (the shader composites
+    // the pointer from CursorOverlay instead), or the copy with the pointer drawn in otherwise.
     internal nint FrameTexture => !IsHdrDesktop && _pointerDrawn ? (nint)_composed : (nint)_frame;
 
     // The pointer, on its own, for the colour shader to blend onto the picture it converts. Zero
@@ -250,9 +247,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         // size the frame is now: a mode change is exactly what moves the edge it is clipped to.
         _cursor?.FrameIs(Width, Height, _bounds);
 
-        // Whether the pointer is drawn at all: on for either format, off only when there is nothing
-        // to draw it with. GDI writes eight-bit BGRA either way — into a copy of the desktop for
-        // an ordinary one, into a texture of its own for an HDR one; see CreateFrameTexture.
+        // Off only when there is nothing to draw the pointer with; see CreateFrameTexture for
+        // where GDI writes it either way.
         _drawPointer = _cursor is not null;
         RefreshRate = desc.ModeDesc.RefreshDenominator == 0
             ? 0
@@ -310,10 +306,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 
         if (IsHdrDesktop)
         {
-            // GDI writes nothing but eight-bit BGRA, so an HDR desktop's pointer goes into a
-            // texture of its own rather than a copy of the half-float frame — the colour shader
-            // blends it in afterwards. Cleared before every draw: there is no desktop under it
-            // here, and a texture left as it was would show the last frame's pointer for ever.
+            // GDI writes nothing but eight-bit BGRA, so an HDR desktop's pointer goes into its
+            // own texture (the colour shader blends it in) instead of the half-float frame.
             var overlay = desc;
             overlay.Format = Dxgi.DXGI_FORMAT_B8G8R8A8_UNORM;
             overlay.MiscFlags = D3D11_RESOURCE_MISC_GDI_COMPATIBLE;
@@ -364,9 +358,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         // a whole frame to change nothing is half a gigabyte a second at 1080p60.
         if (!_cursor!.Wanted(_pointerVisible, out var shape, out var x, out var y))
         {
-            // Nothing to draw now. The HDR overlay is sampled every frame regardless of whether
-            // anything changed, so a pointer that is gone has to be cleared out of it, or it
-            // goes on showing up in every frame after the one it left in.
+            // The HDR overlay is sampled every frame regardless, so a pointer that is gone must
+            // be cleared out of it or it goes on showing up in every frame after.
             if (IsHdrDesktop && wasDrawn) ClearCursorOverlay();
             return wasDrawn;
         }

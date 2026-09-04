@@ -145,7 +145,10 @@ internal sealed class EnetHost : IDisposable
 
         _socket = socket;
         _running = true;
-        _thread = new Thread(Loop) { IsBackground = true, Name = "enet" };
+        // Same priority as the "stream" thread: input and rumble ride this channel, and a
+        // Normal-priority control thread losing its core to a Highest one reads as input lag.
+        _thread = new Thread(Loop)
+            { IsBackground = true, Name = "enet", Priority = ThreadPriority.Highest };
         _thread.Start();
 
         Log.Info($"listening on port {_port} (enet control)");

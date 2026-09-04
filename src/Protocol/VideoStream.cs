@@ -74,11 +74,18 @@ internal sealed class VideoStream : IDisposable
     // Whether the client has pinged and frames have somewhere to go.
     internal bool HasPeer => _peer is not null;
 
+    // Windows' own default send buffer is too small for a key frame's worth of packets leaving in
+    // one burst; too small makes SendTo block on the kernel draining it, seen as this server pausing.
+    private const int SendBufferBytes = 1 << 20;
+
     internal void Start()
     {
         _socket = UdpBind(Port, BindAddress);
+        _socket.SendBufferSize = SendBufferBytes;
         _running = true;
-        _receiver = new Thread(ReceiveLoop) { IsBackground = true, Name = "video-ping" };
+        // Same priority as the "stream" thread that calls SendFrame on this class.
+        _receiver = new Thread(ReceiveLoop)
+            { IsBackground = true, Name = "video-ping", Priority = ThreadPriority.Highest };
         _receiver.Start();
 
         Log.Info($"video stream ready on port {Port} " +

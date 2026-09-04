@@ -218,7 +218,21 @@ internal static unsafe class NvEnc
         [FieldOffset(256)] internal uint HevcColourPrimaries;
         [FieldOffset(260)] internal uint HevcTransferCharacteristics;
         [FieldOffset(264)] internal uint HevcColourMatrix;
+
+        // NV_ENC_CONFIG_AV1's own colour fields and bit depth, counted from the same union base
+        // as Av1Flags — verified against the real SDK offsets, not guessed.
+        [FieldOffset(236)] internal uint Av1ColourPrimaries;
+        [FieldOffset(240)] internal uint Av1TransferCharacteristics;
+        [FieldOffset(244)] internal uint Av1MatrixCoefficients;
+        [FieldOffset(248)] internal uint Av1ColorRange;
+        [FieldOffset(280)] internal uint Av1OutputBitDepth;
+        [FieldOffset(284)] internal uint Av1InputBitDepth;
     }
+
+    // NV_ENC_BIT_DEPTH: the values themselves, not an offset from eight the way HEVC's bitfield
+    // counts them.
+    internal const uint Av1BitDepth8 = 8;
+    internal const uint Av1BitDepth10 = 10;
 
     // The three the high dynamic range stream declares, from H.273: Rec. 2020 primaries, the
     // perceptual quantiser, and Rec. 2020 non-constant luminance for the luma and chroma.

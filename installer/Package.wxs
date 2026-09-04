@@ -15,7 +15,7 @@
 
   Built by build.ps1, which takes the version and the publisher from the csproj so that the
   installer cannot say one thing while the exe says another:
-      wix build -arch x64 -d Version=0.7.0 -d Manufacturer=lysnet.ru -d Exe=...
+      wix build -arch x64 -d Version=1.0.0 -d Manufacturer=lysnet.ru -d Exe=...
 -->
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -76,6 +76,13 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
     <StandardDirectory Id="TempFolder" />
+
+    <!-- Where the server keeps its configuration whichever way it was installed — see
+         AppConfig.FallbackDirectory. Named here only so the virtual-display checkbox below can
+         put one setting in that file ahead of the server's own first run. -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="CONFIGFOLDER" Name="Remote-Gamehub" />
+    </StandardDirectory>
 
     <!-- "Just me" would otherwise land in AppData\Local\Apps\Remote-Gamehub. The server keeps
          its files beside the exe unless the exe is in a system folder, and the folder it falls
@@ -160,6 +167,25 @@
       </Component>
     </ComponentGroup>
 
+    <!-- The one line the checkbox on the shortcuts page asks for: not the driver, which this
+         package never carries, only the setting that makes the server look for one. addLine
+         writes the file if it does not exist yet, which it usually does not — the server's own
+         first run then finds VirtualDisplay already there and rewrites the file whole, with
+         every other setting explained above it exactly as an ordinary first run would. -->
+    <ComponentGroup Id="VirtualDisplayConfigFiles" Directory="CONFIGFOLDER">
+      <Component Id="VirtualDisplayConfig" Guid="7FC65322-E599-43EA-A41B-55472499DA5C">
+        <IniFile Id="SetVirtualDisplay" Action="addLine" Directory="CONFIGFOLDER"
+                 Name="Remote-Gamehub.conf" Section="General" Key="VirtualDisplay" Value="true" />
+
+        <RegistryValue Root="HKCU"
+                       Key="Software\Remote-Gamehub"
+                       Name="VirtualDisplaySetting"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
     <!-- The two checkboxes, on by default. Each drives a feature of its own rather than a
          condition on the component: a feature left out at install is remembered as left out, and
          a component switched off by a condition would go looking for that condition again when
@@ -167,32 +193,14 @@
     <Property Id="INSTALLSTARTMENUSHORTCUT" Value="1" />
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
 
-    <!-- On by default: the client's pads are what most people stream games for. The driver is
-         machine-wide and shared — Sunshine and others use the same one — so it is left in place
-         when this server is removed. -->
+    <!-- The client's pads are what most people stream games for, so this is on by default. The
+         driver is machine-wide and shared with other programs that use it, so it is left in
+         place when this server is removed. -->
     <Property Id="INSTALLVIGEM" Value="1" />
 
-    <!-- Whether the bus driver is already there, and whether it was left switched off: its
-         service exists once it is installed, whichever setup put it in, and a raw read gives the
-         start type as "#4" when it is disabled. Only the question on the page hangs on these —
-         which version is installed, and whether it is the newest, is the script's to answer. -->
-    <Property Id="VIGEMINSTALLED">
-      <RegistrySearch Id="ViGEmSearch"
-                      Root="HKLM"
-                      Key="SYSTEM\CurrentControlSet\Services\ViGEmBus"
-                      Name="ImagePath"
-                      Type="raw"
-                      Bitness="always64" />
-    </Property>
-
-    <Property Id="VIGEMSTART">
-      <RegistrySearch Id="ViGEmStartSearch"
-                      Root="HKLM"
-                      Key="SYSTEM\CurrentControlSet\Services\ViGEmBus"
-                      Name="Start"
-                      Type="raw"
-                      Bitness="always64" />
-    </Property>
+    <!-- Off by default: unlike the drivers above, this package does not fetch this one, and asking
+         for it without saying so would be the wrong default. -->
+    <Property Id="INSTALLVDD" Value="0" />
 
     <Feature Id="Main"
              Title="Remote Game Hub"
@@ -215,6 +223,12 @@
         <Level Value="0" Condition="INSTALLDESKTOPSHORTCUT &lt;&gt; 1" />
       </Feature>
 
+      <Feature Id="VirtualDisplaySetting" Title="Virtual display driver"
+               Description="Turns on [General] VirtualDisplay in the configuration file." Level="1">
+        <ComponentGroupRef Id="VirtualDisplayConfigFiles" />
+        <Level Value="0" Condition="INSTALLVDD &lt;&gt; 1" />
+      </Feature>
+
     </Feature>
 
     <!-- Run when this install is over rather than inside it: both setups it may reach for are
@@ -229,7 +243,8 @@
                   ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[TempFolder]Prerequisites.ps1&quot; [DRIVERSWITCH]"
                   Return="ignore" />
 
-    <!-- The cleared checkbox travels to the script as its one switch. -->
+    <!-- The checkbox travels to the script as its one switch: fetch ViGEmBus only when it is
+         still checked. -->
     <SetProperty Id="DRIVERSWITCH" Value="-NoDriver" Before="InstallPrerequisites"
                  Sequence="execute" Condition="INSTALLVIGEM &lt;&gt; 1" />
 
@@ -283,6 +298,13 @@
     <CustomAction Id="SetAppTarget" Property="WixShellExecTarget" Value="[#RemoteGameHubExe]" />
     <CustomAction Id="LaunchApplication" DllEntry="WixShellExec" BinaryRef="Wix4UtilCA_X64" Impersonate="yes" />
 
+    <!-- The one thing the virtual-display checkbox actually fetches: its own page, in the
+         person's own browser, so they install it — or not — on their own terms. This package
+         installs nothing of the driver itself. -->
+    <CustomAction Id="SetVddTarget" Property="WixShellExecTarget"
+                  Value="https://github.com/VirtualDrivers/Virtual-Display-Driver/releases" />
+    <CustomAction Id="OpenVddPage" DllEntry="WixShellExec" BinaryRef="Wix4UtilCA_X64" Impersonate="yes" />
+
     <!-- Our page of shortcuts, put between the folder page and the last one.
 
          Where a button already carries a jump of the stock set, ours has to come after it: several
@@ -316,6 +338,11 @@
                Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed" Order="1" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication"
                Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed" Order="2" />
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="SetVddTarget"
+               Condition="INSTALLVDD = 1 AND NOT Installed" Order="3" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenVddPage"
+               Condition="INSTALLVDD = 1 AND NOT Installed" Order="4" />
     </UI>
   </Package>
 </Wix>

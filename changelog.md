@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0
+
+* Full 5.1 and 7.1 surround sound support
+* Virtual mouse, if you don't have a HID device connected
+* Virtual display support (you need to install the driver yourself)
+* DualShock 4 controllers
+
 ## 0.7
 
 * Bugfix audio channels
