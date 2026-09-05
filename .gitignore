@@ -19,6 +19,7 @@ Remote-Gamehub.log.old
 Remote-Gamehub.pem
 Remote-Gamehub-capture.png
 Remote-Gamehub.db
+.DS_Store
 covers/
 # What WiX leaves beside the installer sources; build.ps1 clears it after every run.
 installer/obj/
