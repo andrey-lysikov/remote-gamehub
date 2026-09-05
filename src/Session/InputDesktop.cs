@@ -27,16 +27,32 @@ internal static class InputDesktop
 
     // Attaches this thread to whatever desktop currently has the input, when it is not there
     // already. Called before a batch rather than once: the desktop changes under a running stream.
-    internal static void Attach()
+    // force skips the throttle below, for the one caller that already knows the desktop moved:
+    // the capture, which is reopening a duplication precisely because Windows switched desktops.
+    internal static void Attach(bool force = false)
     {
         // Not on every call. This runs once per sent frame and once per input packet — six hundred
         // times a second between them — for an answer that changes when somebody locks the screen.
         var now = Environment.TickCount;
-        if (_attachedName is not null && (uint)(now - _lastLook) < LookAgainAfterMs) return;
+        if (!force && _attachedName is not null && (uint)(now - _lastLook) < LookAgainAfterMs) return;
         _lastLook = now;
 
         var desktop = User32.OpenInputDesktop(0, false, User32.DESKTOP_ALL);
-        if (desktop == 0) return;
+        if (desktop == 0)
+        {
+            // The usual reason is the secure desktop, which only LocalSystem may open: a UAC
+            // prompt or the lock screen is in front and this copy is not the service's worker.
+            // This thread stays where it is; what it captures and types into is the desktop
+            // behind the prompt, which Windows will not show and will not accept input for.
+            App.Log.WarnOccasionally("input desktop closed",
+                "The desktop that has the input cannot be opened, which is what Windows answers\n" +
+                "while a UAC prompt or the lock screen is in front and this server is not running\n" +
+                "as LocalSystem. The picture holds still and the keyboard does not reach it until\n" +
+                "the prompt is answered at the machine itself.\n" +
+                "What to do: install the service, which runs the server as SYSTEM and can stream\n" +
+                "and type into those screens — \"" + Environment.ProcessPath + "\" install-service");
+            return;
+        }
 
         var name = NameOf(desktop);
 

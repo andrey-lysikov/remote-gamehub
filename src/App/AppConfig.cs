@@ -125,8 +125,14 @@ internal sealed class AppConfig
     internal static string UserPath =>
         System.IO.Path.Combine(FallbackDirectory, AppParameters.Identity.ConfFile);
 
+    // Where a profile-kept configuration goes when the process is not the person who owns it.
+    // Set once at startup by the worker when it runs as SYSTEM: LocalApplicationData would
+    // otherwise be SYSTEM's own profile under System32, where nobody would ever look for it.
+    internal static string? ProfileDirectoryOverride { get; set; }
+
     internal static string FallbackDirectory => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        ProfileDirectoryOverride ??
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         AppParameters.Identity.DataFolder);
 
     // The portable file wins, unless the executable sits in a system folder — an installed copy

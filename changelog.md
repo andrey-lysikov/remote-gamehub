@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2
+
+* Add service for UAC resolve
+* Fix opus multichannel warning
+
 ## 1.1
 
 * Update HDR analyse

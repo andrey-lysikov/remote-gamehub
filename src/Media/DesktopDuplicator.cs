@@ -19,6 +19,27 @@ internal enum CaptureStatus
     Unavailable,
 }
 
+internal enum ReopenOutcome
+{
+    // A new duplication is open. The frame texture is new too, so the encoder is rebuilt with it.
+    Reopened,
+    // Windows will not duplicate this screen at the moment, and the reason passes on its own: a
+    // prompt on the secure desktop, the lock screen, a session being handed over. Waiting is the
+    // answer, and it must not count towards giving up — nothing is wrong with this server.
+    Unavailable,
+    // Something else, which may or may not pass. Counted, and the stream ends if it goes on.
+    Failed,
+}
+
+// The desktop is there but not this process's to duplicate right now. Separated from every other
+// refusal because the answer is different: wait, rather than rebuild or give up. Windows says this
+// while the secure desktop is in front — a UAC prompt, the sign-in or lock screen — to everything
+// that is not LocalSystem, and to LocalSystem too when its thread is on the wrong desktop.
+internal sealed class DesktopUnavailableException : Exception
+{
+    internal DesktopUnavailableException(string message) : base(message) { }
+}
+
 // The desktop as the compositor flattened it, through Desktop Duplication — hence no per-API path.
 // The frame is copied out because the acquired one must be released before the next is asked for.
 internal sealed unsafe class DesktopDuplicator : IDisposable
@@ -162,6 +183,14 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 
     private void OpenDuplication()
     {
+        // The one call that makes a UAC prompt streamable. A duplication belongs to the desktop the
+        // asking thread is on, and Windows composes the prompt on a desktop of its own (Winlogon).
+        // Moved there first, the duplication opens on it and the prompt is what gets captured;
+        // left on Default, DuplicateOutput answers DXGI_ERROR_ACCESS_DENIED until the prompt is
+        // gone. Only LocalSystem may open the secure desktop, which is why the service exists —
+        // for anyone else this call quietly does nothing and the refusal below is handled instead.
+        Session.InputDesktop.Attach(force: true);
+
         Com.Check(Dxgi.EnumOutputs(_adapter, (uint)_outputIndex, out var output),
             $"IDXGIAdapter::EnumOutputs({_outputIndex})");
 
@@ -279,6 +308,12 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 
     private void CreateFrameTexture()
     {
+        // Here rather than in Reopen: between a lost duplication and a new one the frame texture
+        // holds the last picture that was captured, and the stream goes on sending it. A prompt
+        // for administrator rights is exactly that gap, and a client sent nothing for the seven
+        // seconds it waits gives up and disconnects — which is not what the waiting is for.
+        ReleaseFrameTextures();
+
         var desc = new D3D11Texture2DDesc
         {
             Width = (uint)Width,
@@ -352,7 +387,7 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         var wasDrawn = _pointerDrawn;
         _pointerDrawn = false;
 
-        if (!_drawPointer) return false;
+        if (!_drawPointer || _frame is null) return false;
 
         // Asked before the copy, not after: inside a game there is no pointer at all, and copying
         // a whole frame to change nothing is half a gigabyte a second at 1080p60.
@@ -397,7 +432,12 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
     // frame texture when it does.
     internal CaptureStatus TryCapture(int timeoutMs)
     {
-        if (_disposed || _duplication is null || _frame is null) return CaptureStatus.Lost;
+        if (_disposed || _frame is null) return CaptureStatus.Lost;
+
+        // The duplication is gone but the texture it filled is not, which is how the stream goes
+        // on sending the last picture while Windows is holding the screen back. Answered as Lost
+        // so the caller asks for a new duplication, which is the only thing that can end this.
+        if (_duplication is null) return CaptureStatus.Lost;
 
         ReleaseHeldFrame();
 
@@ -525,14 +565,10 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         Dxgi.ReleaseFrame(_duplication);
     }
 
-    // Opens the duplication again after it was lost; the device is kept, since rebuilding it would
-    // invalidate the encoder. The resolution can differ afterwards, so both are rebuilt.
-    internal bool Reopen()
+    // The textures the frame is composed in. Released when the next set is made, not when the
+    // duplication is lost: see CreateFrameTexture for why the last picture is kept.
+    private void ReleaseFrameTextures()
     {
-        ReleaseHeldFrame();
-
-        Com.ReleaseAndClear(ref _duplication);
-        Com.ReleaseAndClear(ref _output1);
         Com.ReleaseAndClear(ref _frame);
         Com.ReleaseAndClear(ref _composedSurface);
         Com.ReleaseAndClear(ref _composed);
@@ -540,16 +576,32 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         Com.ReleaseAndClear(ref _cursorOverlaySurface);
         Com.ReleaseAndClear(ref _cursorOverlay);
         _pointerDrawn = false;
+    }
+
+    // Opens the duplication again after it was lost; the device is kept, since rebuilding it would
+    // invalidate the encoder. The resolution can differ afterwards, so both are rebuilt.
+    internal ReopenOutcome Reopen()
+    {
+        ReleaseHeldFrame();
+
+        Com.ReleaseAndClear(ref _duplication);
+        Com.ReleaseAndClear(ref _output1);
 
         try
         {
             OpenDuplication();
-            return true;
+            return ReopenOutcome.Reopened;
+        }
+        catch (DesktopUnavailableException error)
+        {
+            // Not a failure, and deliberately not counted as one: the caller waits and asks again.
+            Log.Info($"the desktop cannot be duplicated at the moment: {error.Message}");
+            return ReopenOutcome.Unavailable;
         }
         catch (Exception error)
         {
             Log.Info($"the desktop is not available yet: {error.Message}");
-            return false;
+            return ReopenOutcome.Failed;
         }
     }
 
@@ -561,10 +613,13 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
             "The desktop cannot be duplicated: Windows already has as many duplications of this " +
             "screen as it allows. Another streaming or recording program is holding one."),
 
-        Dxgi.DXGI_ERROR_ACCESS_DENIED or Dxgi.E_ACCESSDENIED => new InvalidOperationException(
-            "The desktop cannot be duplicated right now, which is what Windows answers while the " +
-            "sign-in screen, a UAC prompt or the lock screen is in front. It becomes available " +
-            "again on its own once the desktop is back."),
+        Dxgi.DXGI_ERROR_ACCESS_DENIED or Dxgi.E_ACCESSDENIED => new DesktopUnavailableException(
+            "Windows refuses to duplicate this screen, which is what it answers while the " +
+            "sign-in screen, a UAC prompt or the lock screen is in front" +
+            (App.PlatformGuard.IsSystem
+                ? ". It becomes available again on its own once the desktop is back."
+                : ". Only a server running as LocalSystem can capture those; install the service " +
+                  "to stream them. It becomes available again on its own once the prompt is gone.")),
 
         Dxgi.DXGI_ERROR_UNSUPPORTED => new InvalidOperationException(
             "This screen cannot be duplicated. That is what a graphics driver answers when the " +
@@ -572,9 +627,10 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
             "Display Adapter, or a remote desktop session. Install the graphics driver, and stream " +
             "from the physical screen."),
 
-        Dxgi.DXGI_ERROR_SESSION_DISCONNECTED => new InvalidOperationException(
+        Dxgi.DXGI_ERROR_SESSION_DISCONNECTED => new DesktopUnavailableException(
             "There is no session on this screen to duplicate. This happens when the server runs " +
-            "in a session that is not the one attached to the console."),
+            "in a session that is not the one attached to the console, and while the console is " +
+            "being handed from one session to another."),
 
         _ => new InvalidOperationException(
             $"IDXGIOutput1::DuplicateOutput failed: 0x{hr:X8} ({Com.Describe(hr)})."),
@@ -590,12 +646,7 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 
         Com.ReleaseAndClear(ref _duplication);
         Com.ReleaseAndClear(ref _output1);
-        Com.ReleaseAndClear(ref _frame);
-        Com.ReleaseAndClear(ref _composedSurface);
-        Com.ReleaseAndClear(ref _composed);
-        Com.ReleaseAndClear(ref _cursorOverlayRtv);
-        Com.ReleaseAndClear(ref _cursorOverlaySurface);
-        Com.ReleaseAndClear(ref _cursorOverlay);
+        ReleaseFrameTextures();
         Com.ReleaseAndClear(ref _context);
         Com.ReleaseAndClear(ref _device);
         Com.ReleaseAndClear(ref _adapter);

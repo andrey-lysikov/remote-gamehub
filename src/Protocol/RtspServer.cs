@@ -332,6 +332,17 @@ internal sealed class RtspServer : IAsyncDisposable
 
         // The digit strings Sunshine advertises (audio.cpp stream_configs, cmd_describe's
         // rotation). Every layout always: a client reads only the lines for the count it chose.
+        // Each line is the channel count, the number of streams, the number of coupled streams,
+        // and then the channel mapping, one digit each.
+        //
+        // The mapping on the two normal-quality surround lines — 012453 and 01245367 — is not the
+        // one the encoder is given, which is 012345 and 01234567; it is that one with the three
+        // digits from index three rotated one place left. That is not a mistake and must not be
+        // "corrected": GeForce Experience advertised the wrong mapping for these two layouts,
+        // every Moonlight client works around it by rotating those channels back to the right,
+        // and this rotation is what cancels that one out. The high-quality lines are never
+        // rotated by the client and so are advertised as they are encoded. AudioStream is the
+        // other half of this.
         sdp.Append("a=fmtp:97 surround-params=21101\n");
         sdp.Append("a=fmtp:97 surround-params=21101\n");
         sdp.Append("a=fmtp:97 surround-params=642012453\n");

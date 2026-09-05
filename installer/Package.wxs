@@ -248,6 +248,22 @@
     <SetProperty Id="DRIVERSWITCH" Value="-NoDriver" Before="InstallPrerequisites"
                  Sequence="execute" Condition="INSTALLVIGEM &lt;&gt; 1" />
 
+    <!-- The service the server makes for itself at its first start — see App/ServiceControl.cs.
+         Removed by the server's own verb rather than by anything written here: the service is the
+         application's to make and to take away, and one place knows how.
+
+         This is also what actually frees the executable. What is running is the service and the
+         copy of the server it started as SYSTEM, neither of which has a window a close message
+         could reach, so the CloseApplication below never reaches them; stopping the service ends
+         both. It runs before the files are removed, or the exe the service points at would still
+         be in use and Windows Installer would ask for a restart to finish. -->
+    <CustomAction Id="RemoveService"
+                  Directory="APPLICATIONFOLDER"
+                  ExeCommand="&quot;[#RemoteGameHubExe]&quot; uninstall-service"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
     <!-- A copy that is running holds the ports and the exe, on the way in and on the way out. It
          has no window for a close message to reach and runs elevated, so it is asked from the
          elevated side and then ended: nothing here can be closed by asking politely. -->
@@ -274,6 +290,11 @@
       <!-- On an install and on an upgrade, which is where a runtime that has moved on since the
            last one is noticed; never on the way out. -->
       <Custom Action="InstallPrerequisites" After="InstallFinalize" Condition="NOT Installed" />
+      <!-- Before the files, on an uninstall and on the removal half of an upgrade. The order
+           against the task above does not matter; being ahead of RemoveFiles does. An upgrade
+           losing the service costs nothing: the newly installed server makes it again at its
+           first start, pointed at the copy that has just been put there. -->
+      <Custom Action="RemoveService" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
       <Custom Action="RemoveAutostartTask" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 

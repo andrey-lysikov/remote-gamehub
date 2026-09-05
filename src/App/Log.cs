@@ -34,12 +34,15 @@ internal static class Log
     internal static string? Path => _path;
 
     // Opens the log beside the configuration, falling back to fallbackDirectory. If neither can be
-    // written the application starts anyway.
-    internal static void Start(string preferredDirectory, string fallbackDirectory, string version)
+    // written the application starts anyway. fileName is for the service, which writes a log of its
+    // own next to the executable rather than sharing the server's.
+    internal static void Start(string preferredDirectory, string fallbackDirectory, string version,
+                               string? fileName = null)
     {
         foreach (var directory in Distinct(preferredDirectory, fallbackDirectory))
         {
-            var candidate = System.IO.Path.Combine(directory, AppParameters.Identity.LogFile);
+            var candidate = System.IO.Path.Combine(directory,
+                fileName ?? AppParameters.Identity.LogFile);
             try
             {
                 Directory.CreateDirectory(directory);

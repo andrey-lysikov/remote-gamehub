@@ -75,6 +75,41 @@ internal static unsafe class Kernel32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool CancelIoEx(SafeFileHandle device, NativeOverlapped* overlapped);
 
+    // ------------------------------------------------------------------ processes and sessions
+
+    // The exit code of a process that is still running, as GetExitCodeProcess reports it.
+    internal const uint STILL_ACTIVE = 259;
+
+    [DllImport("kernel32.dll")]
+    internal static extern nint GetCurrentProcess();
+
+    // The console this windowed executable was started from. A WinExe has none of its own, so
+    // Console.WriteLine goes nowhere; the command-line verbs borrow the caller's prompt with this.
+    internal const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool AttachConsole(uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern uint WaitForMultipleObjects(uint count, nint[] handles,
+                                                       [MarshalAs(UnmanagedType.Bool)] bool waitAll,
+                                                       uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetExitCodeProcess(nint process, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool TerminateProcess(nint process, uint exitCode);
+
+    // Which session a process is in. Only the log asks: a service is in session 0 and the server
+    // it starts is in the console's, and seeing both numbers is what makes a log of this readable.
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+
     // Sends one control code and waits for the answer. The handle is opened overlapped because the
     // bus's notification request never completes until the guest sends rumble.
     internal static bool Control(SafeFileHandle device, uint controlCode,

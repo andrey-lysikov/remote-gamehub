@@ -126,8 +126,15 @@ internal sealed class Autostart
     private static string Definition(string executable)
     {
         XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
-        using var identity = WindowsIdentity.GetCurrent();
-        var user = identity.Name;
+
+        // The person signed in, not this process: the copy that writes this task is usually the
+        // service's worker, which is LocalSystem, and a task triggered by SYSTEM signing in would
+        // wait for a sign-in that never happens.
+        string user;
+        using (var identity = WindowsIdentity.GetCurrent())
+        {
+            user = UserContext.ConsoleUserName() ?? identity.Name;
+        }
 
         var task = new XElement(ns + "Task", new XAttribute("version", "1.4"),
             new XElement(ns + "RegistrationInfo",

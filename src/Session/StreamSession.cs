@@ -422,17 +422,31 @@ internal sealed class SessionManager : IDisposable
 
         try
         {
-            // A packaged game is addressed by a shell: path, which nothing but Explorer resolves.
-            var start = target.Command.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)
-                ? new ProcessStartInfo("explorer.exe", target.Command) { UseShellExecute = true }
-                : new ProcessStartInfo(target.Command) { UseShellExecute = true };
+            // Started as the person signed in to the console whenever this server is SYSTEM, which
+            // it is when the service started it. A game run as SYSTEM would find none of that
+            // person's profile — no saves, no launcher session, no settings — and several refuse
+            // to start at all. The identity is the only difference; the shell resolves the command
+            // either way.
+            if (PlatformGuard.IsSystem)
+            {
+                if (!SessionLauncher.StartGameAsConsoleUser(target.Command, target.InstallPath))
+                    return false;
+            }
+            else
+            {
+                // A packaged game is addressed by a shell: path, which nothing but Explorer resolves.
+                var start = target.Command.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)
+                    ? new ProcessStartInfo("explorer.exe", target.Command) { UseShellExecute = true }
+                    : new ProcessStartInfo(target.Command) { UseShellExecute = true };
 
-            // From its own folder when one is known: games that look for their data beside the
-            // working directory otherwise start into an error naming this server's folder.
-            if (!string.IsNullOrWhiteSpace(target.InstallPath) && Directory.Exists(target.InstallPath))
-                start.WorkingDirectory = target.InstallPath;
+                // From its own folder when one is known: games that look for their data beside the
+                // working directory otherwise start into an error naming this server's folder.
+                if (!string.IsNullOrWhiteSpace(target.InstallPath) && Directory.Exists(target.InstallPath))
+                    start.WorkingDirectory = target.InstallPath;
 
-            Process.Start(start);
+                Process.Start(start);
+            }
+
             Log.Event($"asked the shell to start \"{target.Title}\": {target.Command}");
         }
         catch (Exception error)
@@ -510,6 +524,21 @@ internal sealed class StreamSession : IDisposable
     // How long the picture must have been still before frames are held back at all. A desktop in
     // use changes in bursts with gaps between them, and those gaps are not idleness.
     private static readonly TimeSpan StillAfter = TimeSpan.FromSeconds(2);
+
+    // What to say when Windows will not hand over the screen. The two identities get different
+    // advice, because for one of them this is a bug to be fixed and for the other it is a moment
+    // to sit through: a server running as SYSTEM captures the prompt and the client answers it.
+    private static string SecureDesktopNotice() => PlatformGuard.IsSystem
+        ? "The desktop is being handed over — a prompt for administrator rights, the lock screen,\n" +
+          "or the console moving between sessions. The picture holds still for the moment it\n" +
+          "takes; the capture follows onto that desktop and the stream carries on."
+        : "There is nothing to capture at the moment: a program asked for administrator rights and\n" +
+          "Windows is drawing the prompt on the secure desktop, or the machine is locked, or\n" +
+          "someone connected over remote desktop and took the console session away.\n" +
+          "The picture holds still until that screen is gone, and the client cannot answer the\n" +
+          "prompt: only a server running as LocalSystem can see or type into it.\n" +
+          "What to do: install the service, which runs this server as SYSTEM —\n" +
+          $"    \"{Environment.ProcessPath}\" install-service";
 
     // How long one step of the capture loop may take before the log says which step it was. Well
     // past a slow frame: at sixty a second nothing here should take a tenth.
@@ -908,8 +937,51 @@ internal sealed class StreamSession : IDisposable
             var hdrAnnounced = false;
 
             // Consecutive lost duplications with nothing captured between. A mode change costs
-            // one; a screen gone for good would otherwise be reopened for ever.
+            // one; a screen gone for good would otherwise be reopened for ever. Only real failures
+            // are counted: a desktop Windows is withholding on purpose is waited out below.
             var lostInARow = 0;
+
+            // When the desktop first became unavailable in the run of unavailability that is
+            // happening now, or MinValue when it is available. A UAC prompt, the lock screen or a
+            // session being handed over all land here, and all of them end on their own — so the
+            // stream is held open on its last picture rather than dropped, for far longer than the
+            // ten seconds a lost duplication is given. Zeroed the moment a frame comes back.
+            var unavailableSince = TimeSpan.MinValue;
+
+            // Says once per run of unavailability what is being waited for, rather than every
+            // two hundred milliseconds.
+            var unavailableSaid = false;
+
+            // Whether the desktop is unavailable now, and for how long. Ends the stream only when
+            // nothing has come back for the whole of the patience: a client left on a still
+            // picture for ever is worse than one told the session ended.
+            bool WaitOutUnavailable()
+            {
+                var now = clock.Elapsed;
+                if (unavailableSince == TimeSpan.MinValue) unavailableSince = now;
+
+                if (!unavailableSaid)
+                {
+                    unavailableSaid = true;
+                    Log.Warn(SecureDesktopNotice());
+                }
+
+                if (now - unavailableSince <=
+                    TimeSpan.FromMilliseconds(AppParameters.Capture.UnavailablePatienceMs))
+                {
+                    Thread.Sleep(AppParameters.Capture.RecreateDelayMs);
+                    return true;
+                }
+
+                Log.Warn(
+                    "The desktop has been unavailable for " +
+                    $"{(now - unavailableSince).TotalMinutes.ToString("0", CultureInfo.InvariantCulture)} " +
+                    "minutes — a prompt or a sign-in screen nobody has answered. The stream is\n" +
+                    "ending rather than holding the client on a picture that will not change.");
+
+                _ended("the desktop stayed unavailable");
+                return false;
+            }
 
             // When the last key frame went out, for the rationing further down. MinValue rather
             // than zero: the first frame of a stream is a key frame and must not wait for it.
@@ -967,62 +1039,80 @@ internal sealed class StreamSession : IDisposable
                     var height = duplicator.Height;
                     var format = duplicator.FrameFormat;
 
-                    if (++lostInARow > MaxLostInARow)
-                    {
-                        Log.Warn(
-                            "The desktop has not produced a frame for a long time, however often\n" +
-                            "the duplication is opened again. The stream is ending rather than\n" +
-                            "sending a still picture that nothing will replace.");
-                        _ended("the desktop stopped producing frames");
-                        return;
-                    }
+                    var outcome = duplicator.Reopen();
 
-                    if (!duplicator.Reopen())
+                    // Windows is withholding the screen on purpose — a UAC prompt or the lock
+                    // screen is in front. This is where a stream used to die: the duplication was
+                    // gone, every reopen was refused, and fifty refusals at two hundred
+                    // milliseconds ended the session ten seconds into a prompt nobody had had
+                    // time to answer. It is not a failure and is not counted as one. The loop
+                    // carries on to the sending below rather than going round again, because the
+                    // frame texture still holds the last picture and a client sent nothing at all
+                    // for seven seconds decides this machine has stopped and disconnects.
+                    if (outcome == ReopenOutcome.Unavailable)
                     {
+                        if (!WaitOutUnavailable()) return;
+                    }
+                    else if (outcome == ReopenOutcome.Failed)
+                    {
+                        if (++lostInARow > MaxLostInARow)
+                        {
+                            Log.Warn(
+                                "The desktop has not produced a frame for a long time, however often\n" +
+                                "the duplication is opened again. The stream is ending rather than\n" +
+                                "sending a still picture that nothing will replace.");
+                            _ended("the desktop stopped producing frames");
+                            return;
+                        }
+
                         Thread.Sleep(AppParameters.Capture.RecreateDelayMs);
                         continue;
                     }
-
-                    // Reopen() always hands back a new frame texture, same size or not; keeping
-                    // the old encoder was seen crashing on it once (NV_ENC_ERR_INVALID_PARAM).
-                    if (duplicator.Width != width || duplicator.Height != height ||
-                        duplicator.FrameFormat != format)
-                    {
-                        Log.Info($"the screen changed to {duplicator.Width}x{duplicator.Height} " +
-                                 $"(format {duplicator.FrameFormat}); the encoder is being rebuilt");
-                    }
                     else
                     {
-                        Log.Info("the desktop capture was reopened; the encoder is being rebuilt " +
-                                 "with it");
+                        lostInARow = 0;
+                        unavailableSince = TimeSpan.MinValue;
+                        unavailableSaid = false;
+
+                        // Reopen() always hands back a new frame texture, same size or not; keeping
+                        // the old encoder was seen crashing on it once (NV_ENC_ERR_INVALID_PARAM).
+                        if (duplicator.Width != width || duplicator.Height != height ||
+                            duplicator.FrameFormat != format)
+                        {
+                            Log.Info($"the screen changed to {duplicator.Width}x{duplicator.Height} " +
+                                     $"(format {duplicator.FrameFormat}); the encoder is being rebuilt");
+                        }
+                        else
+                        {
+                            Log.Info("the desktop capture was reopened; the encoder is being rebuilt " +
+                                     "with it");
+                        }
+
+                        encoder.Dispose();
+                        encoder = VideoEncoders.Open(duplicator.Device, _capabilities,
+                            _negotiation.Codec, duplicator.Width, duplicator.Height,
+                            _negotiation.BitrateKbps, _negotiation.Fps,
+                            duplicator.FrameFormat == Dxgi.DXGI_FORMAT_R10G10B10A2_UNORM,
+                            _negotiation.Yuv444, _quality);
+                        _keyFrameWanted = true;
+
+                        continue;
                     }
-
-                    encoder.Dispose();
-                    encoder = VideoEncoders.Open(duplicator.Device, _capabilities,
-                        _negotiation.Codec, duplicator.Width, duplicator.Height,
-                        _negotiation.BitrateKbps, _negotiation.Fps,
-                        duplicator.FrameFormat == Dxgi.DXGI_FORMAT_R10G10B10A2_UNORM,
-                        _negotiation.Yuv444, _quality);
-                    _keyFrameWanted = true;
-
-                    continue;
                 }
-
-                if (status == CaptureStatus.Unavailable)
+                else if (status == CaptureStatus.Unavailable)
                 {
-                    // The lock screen, a prompt on the secure desktop, or a remote desktop
-                    // connection taking the console away. All come back on their own.
-                    Log.WarnOccasionally("desktop unavailable",
-                        "There is nothing to capture at the moment. That is the lock screen, a\n" +
-                        "prompt, or someone having connected to this machine over remote desktop —\n" +
-                        "which disconnects the console session and takes the picture with it. The\n" +
-                        "stream stays connected and resumes on its own once the console is back.");
-
-                    Thread.Sleep(AppParameters.Capture.RecreateDelayMs);
-                    continue;
+                    // The same waiting as above, reached the other way: AcquireNextFrame itself
+                    // refused rather than the reopen. The lock screen, a prompt on the secure
+                    // desktop, or a remote desktop connection taking the console away. It falls
+                    // through to the sending below for the same reason.
+                    if (!WaitOutUnavailable()) return;
                 }
-
-                lostInARow = 0;
+                else
+                {
+                    lostInARow = 0;
+                    unavailableSince = TimeSpan.MinValue;
+                    unavailableSaid = false;
+                }
 
                 report.KeyFramesAsked(Interlocked.Exchange(ref _keyFramesAsked, 0));
                 report.PacketsLost(Interlocked.Exchange(ref _packetsLost, 0));

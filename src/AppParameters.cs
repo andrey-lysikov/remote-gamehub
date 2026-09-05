@@ -16,6 +16,12 @@ internal static class AppParameters
         internal const string FileBase = "Remote-Gamehub";
 
         internal const string LogFile = FileBase + ".log";
+
+        // The service's log, which is not the server's: they are two processes under two accounts,
+        // and appending to one file loses lines. Deliberately not FileBase-prefixed like the rest,
+        // because it sits in the same folder as the executable and a portable copy keeps the
+        // server's own Remote-Gamehub.log right beside it.
+        internal const string ServiceLogFile = "service.log";
         internal const string ConfFile = FileBase + ".conf";
 
         // Folder created under %LOCALAPPDATA% for an installed copy, and the one the installer
@@ -28,6 +34,11 @@ internal static class AppParameters
         // The scheduled task that starts the server at sign-in. Named after the product so that it
         // is recognisable in Task Scheduler.
         internal const string StartupTask = DisplayName;
+
+        // The Windows service that keeps the server running as SYSTEM on the console. No spaces:
+        // this is the name every sc.exe command and the registry key use; DisplayName is what the
+        // services list shows.
+        internal const string ServiceName = "RemoteGameHub";
     }
 
     // Where the project lives and where a newer copy of it is looked for. The one thing to correct
@@ -209,5 +220,11 @@ internal static class AppParameters
         // Desktop Duplication is lost on a mode change, a resolution change, a full-screen
         // transition and a session switch. It is not an error; the duplication is re-created.
         internal const int RecreateDelayMs = 200;
+
+        // How long the desktop may be unavailable — a UAC prompt nobody answers, a lock screen —
+        // before the stream is ended rather than held open on a frozen picture. Generous on
+        // purpose: the whole point of the service is that a client can answer that prompt itself,
+        // and a person walking to the machine and back takes longer than a few seconds.
+        internal const int UnavailablePatienceMs = 10 * 60 * 1000;
     }
 }

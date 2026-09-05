@@ -26,6 +26,18 @@ internal static class PlatformGuard
         }
     }
 
+    // Whether this process is LocalSystem, which is what the service starts the server as. It is
+    // the one identity Windows lets capture and type into the secure desktop — the UAC prompt and
+    // the lock screen — so several paths ask, and answer differently when it is false.
+    internal static bool IsSystem
+    {
+        get
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return identity.IsSystem;
+        }
+    }
+
     // Whether this process runs inside a remote desktop session. It does not stop the server: the
     // session is watched from SessionWatch instead, because it changes while the server runs.
     internal static bool IsRemoteSession =>
@@ -39,5 +51,20 @@ internal static class PlatformGuard
         var name = build >= MinimumBuild ? "Windows 11" : $"Windows {Environment.OSVersion.Version.Major}";
 
         return $"{name} build {build}, {(Environment.Is64BitOperatingSystem ? "64-bit" : "32-bit")}";
+    }
+
+    // Who this process is, for the log: the identity decides whether the secure desktop can be
+    // captured at all, and it is the first thing to check when a UAC prompt freezes a stream.
+    internal static string DescribeIdentity()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+
+        return IsSystem
+            ? "running as LocalSystem: the UAC prompt and the lock screen can be streamed and typed into"
+            : $"running as {identity.Name}" +
+              (IsElevated ? " with administrator rights" : " without administrator rights") +
+              ": the UAC prompt and the lock screen cannot be captured, and the picture holds still\n" +
+              "while one is in front. Install the service to stream those too:\n" +
+              $"    \"{Environment.ProcessPath}\" install-service";
     }
 }

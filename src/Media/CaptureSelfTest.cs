@@ -40,7 +40,7 @@ internal static unsafe class CaptureSelfTest
                     return 0;
 
                 case CaptureStatus.Lost:
-                    if (!duplicator.Reopen()) Thread.Sleep(SliceMs);
+                    if (duplicator.Reopen() != ReopenOutcome.Reopened) Thread.Sleep(SliceMs);
                     break;
 
                 case CaptureStatus.Unavailable:

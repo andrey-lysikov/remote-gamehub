@@ -29,6 +29,10 @@ internal static class Preflight
         // Before the configuration is read, and therefore while everything is still being logged.
         Log.Info(PlatformGuard.DescribeWindows());
 
+        // The one line that answers, from the log alone, why a stream froze at a prompt for
+        // administrator rights: whether this copy is the service's worker or an ordinary one.
+        Log.Event(PlatformGuard.DescribeIdentity());
+
         if (!PlatformGuard.IsWindows11OrNewer)
         {
             return Stop(

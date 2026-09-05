@@ -23,7 +23,7 @@
     <Authors>Andrey.Lysikov and Claude</Authors>
     <Copyright>© Andrey Lysikov, Apache 2.0 licence.</Copyright>
     <Description>Desktop and game streaming to Moonlight clients, encoded on the graphics card.</Description>
-    <Version>1.1</Version>
+    <Version>1.2</Version>
   </PropertyGroup>
 
   <PropertyGroup>
