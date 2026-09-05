@@ -125,6 +125,10 @@ internal static unsafe class DisplayControl
     internal const uint AdvancedColorSupported = 1 << 0;
     internal const uint AdvancedColorEnabled = 1 << 1;
 
+    // Set when Windows itself will not offer the HDR switch in Settings for this screen, whatever
+    // the EDID claims — the same bit this API's raw write would otherwise happily override.
+    internal const uint AdvancedColorForceDisabled = 1 << 3;
+
     // The scaling a screen is set to. Windows exposes no documented way to read or write it: these
     // request types are what Settings sends, negative because Microsoft's private ones count down.
     internal const uint DEVICE_INFO_GET_DPI_SCALE = 0xFFFFFFFD;   // -3

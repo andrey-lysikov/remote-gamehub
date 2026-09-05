@@ -83,8 +83,12 @@ internal static class AppParameters
 
     internal static class Logging
     {
-        // Past this the log is rotated to a single .old file.
+        // Past this the log is rotated to <name>.log.1, pushing older numbers up.
         internal const long MaxBytes = 1024 * 1024;
+
+        // Kept as .log.1 through .log.<this>; whatever would become the next number is deleted
+        // instead.
+        internal const int MaxRotations = 7;
 
         // The size is re-checked every this many lines, not on every write.
         internal const int CheckEveryLines = 100;

@@ -569,7 +569,34 @@ internal sealed class GameStreamServer : IAsyncDisposable
         // Signed on the wire, unsigned here — the bits are kept, since both ends derive IVs from
         // it. 5.1 and 7.1 both move the sound; anything else stays on two.
         var audioChannels = channels == 6 ? 6 : channels == 8 ? 8 : 2;
-        return new LaunchRequest(appId, riKey, unchecked((uint)riKeyId), audioChannels);
+
+        // The same size, rate and range the RTSP ANNOUNCE repeats a moment later — read here so
+        // the screen can be moved before the game reads it, not after. Left at zero/false, which
+        // skips that early move, when an older client sends neither.
+        var (width, height, fps) = ParseMode(request.Query("mode"));
+        var hdrRequested = request.Query("hdrMode") == "1";
+
+        return new LaunchRequest(appId, riKey, unchecked((uint)riKeyId), audioChannels,
+            width, height, fps, hdrRequested);
+    }
+
+    // "1920x1080x60". Anything else, including no mode at all, comes back as zeros.
+    private static (int Width, int Height, int Fps) ParseMode(string? mode)
+    {
+        if (mode is null) return (0, 0, 0);
+
+        var parts = mode.Split('x');
+        if (parts.Length != 3) return (0, 0, 0);
+
+        if (int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var width) &&
+            int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var height) &&
+            int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var fps) &&
+            width > 0 && height > 0 && fps > 0)
+        {
+            return (width, height, fps);
+        }
+
+        return (0, 0, 0);
     }
 
     private string SessionUrl() =>

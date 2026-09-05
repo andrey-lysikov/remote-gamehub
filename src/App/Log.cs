@@ -154,7 +154,8 @@ internal static class Log
         }
     }
 
-    // One previous file, no more. Failures here are swallowed on purpose.
+    // Numbered generations, .log.1 the newest: each is pushed up one number, and whatever falls
+    // past MaxRotations is gone rather than kept forever. Failures here are swallowed on purpose.
     private static void Rotate(string path)
     {
         try
@@ -162,9 +163,16 @@ internal static class Log
             var info = new FileInfo(path);
             if (!info.Exists || info.Length < AppParameters.Logging.MaxBytes) return;
 
-            var old = path + ".old";
-            File.Delete(old);
-            File.Move(path, old);
+            var oldest = $"{path}.{AppParameters.Logging.MaxRotations}";
+            File.Delete(oldest);
+
+            for (var number = AppParameters.Logging.MaxRotations - 1; number >= 1; number--)
+            {
+                var from = $"{path}.{number}";
+                if (File.Exists(from)) File.Move(from, $"{path}.{number + 1}");
+            }
+
+            File.Move(path, $"{path}.1");
         }
         catch (Exception)
         {

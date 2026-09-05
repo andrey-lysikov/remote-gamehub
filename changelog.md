@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1
+
+* Update HDR analyse
+* Fix desktop scales
+* Clean status of clentt and host
+
 ## 1.0
 
 * Full 5.1 and 7.1 surround sound support

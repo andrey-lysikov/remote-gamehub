@@ -13,7 +13,11 @@ namespace RemoteGameHub.Session;
 
 // What a client asked for at /launch or /resume, before the RTSP negotiation fills in the rest.
 // AudioChannels comes from surroundAudioInfo and picks the sound device, before the game starts.
-internal sealed record LaunchRequest(int AppId, byte[] RiKey, uint RiKeyId, int AudioChannels = 2);
+// Width/Height/Fps/HdrRequested come from the same mode/hdrMode a moment before the RTSP ANNOUNCE
+// repeats them, and are zero/false when an older client sends neither.
+internal sealed record LaunchRequest(int AppId, byte[] RiKey, uint RiKeyId, int AudioChannels = 2,
+                                     int Width = 0, int Height = 0, int Fps = 0,
+                                     bool HdrRequested = false);
 
 // One client, streaming. /launch carries the encryption key but not the resolution or the codec,
 // which arrive in the RTSP ANNOUNCE, so the session is only built when the negotiation completes.
@@ -35,6 +39,11 @@ internal sealed class SessionManager : IDisposable
     // The machine's sound moved onto a device that can carry what the client asked for, held here
     // rather than in the session: it is applied before the game starts, which is before there is one.
     private AudioAdaptation? _audio;
+
+    // The screen moved to the size and range the client asked for, same reasoning: a game reads
+    // HDR support once at its own startup, so this has to land before StartApplication, not after.
+    // Handed to the StreamSession once it exists; disposed here only if one never does.
+    private DisplayAdaptation? _display;
 
     internal SessionManager(AppConfig config, DisplayOutput output, EncoderCapabilities encoder,
                             GameLibrary games, GamepadHub gamepads, TrayIcon tray,
@@ -111,6 +120,7 @@ internal sealed class SessionManager : IDisposable
         // Before the game, not after: a game reads the default playback device when it starts, and
         // one started on the old device would keep it for as long as it runs.
         MoveTheSound(request.AudioChannels);
+        AdaptTheScreen(request);
 
         if (request.AppId != AppParameters.Protocol.DesktopAppId && !StartApplication(request.AppId))
         {
@@ -160,13 +170,29 @@ internal sealed class SessionManager : IDisposable
             return;
         }
 
+        // Taken over rather than reused as-is: ResolveOutput() re-picks the screen fresh, and a
+        // virtual display appearing between the launch and now would make the two disagree on
+        // which one this adaptation belongs to.
+        DisplayAdaptation? preAdapted;
+        lock (_gate)
+        {
+            preAdapted = _display;
+            _display = null;
+        }
+
+        if (preAdapted is not null && !preAdapted.IsFor(output))
+        {
+            preAdapted.Dispose();
+            preAdapted = null;
+        }
+
         try
         {
             var session = new StreamSession(_config, output, _encoder, _gamepads, _tray,
                 request, negotiation, Ended, target?.Title, poster, GameIsUp,
                 gamePointer: target?.Pointer ?? false,
                 gameQuality: target?.Quality ?? StreamQuality.High,
-                showCard: target?.ShowCard ?? true);
+                showCard: target?.ShowCard ?? true, preAdapted: preAdapted);
 
             lock (_gate)
             {
@@ -178,6 +204,7 @@ internal sealed class SessionManager : IDisposable
         }
         catch (Exception error)
         {
+            preAdapted?.Dispose();
             Log.Error("the stream could not be started", error);
             lock (_gate)
             {
@@ -248,10 +275,12 @@ internal sealed class SessionManager : IDisposable
 
             // The identifier is the running game's, not whatever the client asked for: it is
             // resuming what is there.
-            _pending = request with { AppId = _watcher.AppId };
+            request = request with { AppId = _watcher.AppId };
+            _pending = request;
         }
 
         MoveTheSound(request.AudioChannels);
+        AdaptTheScreen(request);
 
         Log.Info("resume accepted; waiting for the client to negotiate the stream");
         return true;
@@ -288,16 +317,23 @@ internal sealed class SessionManager : IDisposable
     {
         StreamSession? session;
         AudioAdaptation? audio;
+        DisplayAdaptation? display;
         lock (_gate)
         {
             session = _session;
             audio = _audio;
+            display = _display;
             _session = null;
             _pending = null;
             _audio = null;
+            _display = null;
         }
 
         audio?.Dispose();
+
+        // Null here whenever Negotiated() ran: it took this over into the session, which puts the
+        // screen back on its own. Left set only when a launch was abandoned before that happened.
+        display?.Dispose();
 
         if (session is null) return;
 
@@ -336,6 +372,32 @@ internal sealed class SessionManager : IDisposable
 
         var adaptation = AudioAdaptation.Apply(channels);
         lock (_gate) _audio = adaptation;
+    }
+
+    // Puts the screen where the client's mode and HDR ask, from the same numbers the RTSP ANNOUNCE
+    // repeats a moment later — before StartApplication, for the same reason MoveTheSound goes first.
+    // A client too old to send mode/hdrMode leaves this a no-op; Negotiated() adapts it as before.
+    private void AdaptTheScreen(LaunchRequest request)
+    {
+        DisplayAdaptation? previous;
+        lock (_gate)
+        {
+            previous = _display;
+            _display = null;
+        }
+
+        previous?.Dispose();
+
+        if (request.Width <= 0 || request.Height <= 0 || request.Fps <= 0) return;
+
+        var desktop = request.AppId == AppParameters.Protocol.DesktopAppId;
+        var wantHdr = request.HdrRequested && _encoder.AnyHdr;
+
+        var adaptation = DisplayAdaptation.Apply(_output, request.Width, request.Height, request.Fps,
+            wantHdr, _encoder.AnyHdr, _config.Adapt, scaleForClient: desktop && _config.ScaleDesktop,
+            isGame: !desktop);
+
+        lock (_gate) _display = adaptation;
     }
 
     // Starts the application and begins watching for it. The command may be a steam:// URL, a
@@ -520,10 +582,13 @@ internal sealed class StreamSession : IDisposable
             _ => "Stereo",
         };
 
-        return $"{width}×{height} {_negotiation.Fps}fps{screen} · " +
-               $"{VideoEncoders.Name(_negotiation.Codec)}" +
-               $"{(SentHdr ? " HDR" : string.Empty)}" +
-               $"{(_negotiation.Yuv444 ? " 4:4:4" : string.Empty)} · {rate} · {audio}";
+        var codec = $"{VideoEncoders.Name(_negotiation.Codec)}" +
+                   $"{(_negotiation.Yuv444 ? " 4:4:4" : string.Empty)}";
+
+        // Its own segment, as the host line does, rather than tacked onto the codec name: HDR is a
+        // property of the picture, not of the codec sending it.
+        return $"{width}×{height} {_negotiation.Fps}fps{screen} · {codec}" +
+               $"{(SentHdr ? " · HDR" : string.Empty)} · {rate} · {audio}";
     }
 
     // The screen's refresh rate as it is written. A rate that is not the frame rate is the whole
@@ -562,6 +627,10 @@ internal sealed class StreamSession : IDisposable
 
     private volatile bool _cardDismissed;
 
+    // Already applied at /launch, from the same mode/hdrMode the negotiation below repeats — null
+    // when the client sent neither, in which case CaptureAndEncode adapts the screen itself.
+    private readonly DisplayAdaptation? _preAdapted;
+
     internal int AppId { get; }
 
     internal StreamSession(AppConfig config, DisplayOutput output, EncoderCapabilities capabilities,
@@ -569,10 +638,12 @@ internal sealed class StreamSession : IDisposable
                            StreamNegotiation negotiation, Action<string> ended,
                            string? gameTitle = null, string? posterPath = null,
                            Func<bool>? gameIsUp = null, bool gamePointer = false,
-                           StreamQuality gameQuality = StreamQuality.High, bool showCard = true)
+                           StreamQuality gameQuality = StreamQuality.High, bool showCard = true,
+                           DisplayAdaptation? preAdapted = null)
     {
         _config = config;
         _output = output;
+        _preAdapted = preAdapted;
         _capabilities = capabilities;
         _gamepads = gamepads;
         _tray = tray;
@@ -700,9 +771,11 @@ internal sealed class StreamSession : IDisposable
             // size and rectangle are read afterwards. Scaling is for a desktop stream only.
             var desktop = AppId == AppParameters.Protocol.DesktopAppId;
 
-            display = DisplayAdaptation.Apply(_output, _negotiation.Width, _negotiation.Height,
-                _negotiation.Fps, hdr, _capabilities.AnyHdr, _config.Adapt,
-                scaleForClient: desktop && _config.ScaleDesktop);
+            // Already done at /launch, before this game read the screen, when the client sent
+            // mode/hdrMode there; otherwise done here, same as it always was.
+            display = _preAdapted ?? DisplayAdaptation.Apply(_output, _negotiation.Width,
+                _negotiation.Height, _negotiation.Fps, hdr, _capabilities.AnyHdr, _config.Adapt,
+                scaleForClient: desktop && _config.ScaleDesktop, isGame: !desktop);
 
             _input.SetScreen(display.Bounds);
 

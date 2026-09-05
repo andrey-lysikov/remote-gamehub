@@ -615,46 +615,45 @@ internal sealed class WebConsole : IAsyncDisposable
         var stream = _sessions.Status;
 
         return stream.Streaming
-            ? $"<b class=live>streaming</b> to {stream.Client} " +
+            ? $"<span class=live>streaming</span> to {stream.Client} " +
               $"<span class=dot>·</span> {stream.Detail}"
-            : "<b>waiting for a client</b>";
+            : "waiting for a client";
     }
 
-    // What this machine is, on the heading's line: the host name, the encoder, the sizes of the
-    // two lists and how long the server has been up.
+    // What this machine is, on the heading's line: the host name, the encoder, the size of the
+    // games list and how long the server has been up. Off or unavailable is left out rather than
+    // named, so the line is only ever what this machine can actually do right now.
     private string HostLine()
     {
         var uptime = DateTimeOffset.Now - _started;
 
-        var codecs = _encoder.Refusal is null
-            ? string.Join("/", new[]
+        var machine = new List<string> { Escape(_identity.HostName) };
+
+        if (_encoder.Refusal is null)
+        {
+            var codecs = string.Join("/", new[]
             {
                 _encoder.H264 ? "H.264" : null,
                 _encoder.Hevc ? "HEVC" : null,
                 _encoder.Av1 ? "AV1" : null,
-            }.Where(codec => codec is not null))
-            : "no encoder";
+            }.Where(codec => codec is not null));
 
-        // What the card can encode. Whether a stream really goes out in it depends on the screen
-        // being in HDR at the time, which only a running stream knows; the log has the reasons.
-        var hdr = _encoder.AnyHdr ? "HDR" : "no HDR";
+            machine.Add($"{Escape(_encoder.Encoder.ToString())} {Escape(codecs)}");
 
-        var machine = new List<string>
-        {
-            Escape(_identity.HostName),
-            $"{Escape(_encoder.Encoder.ToString())} {Escape(codecs)}",
-            Escape(hdr),
-            $"{_games.Count()} games",
-            // Which controller bus is presenting the pads, or that there is none: a client whose
-            // controller does nothing has one question, and this is its answer.
-            _gamepads.IsAvailable
-                ? $"{Escape(_gamepads.Driver)} enabled"
-                : "no controller bus",
-            $"{_clients.Count()} paired",
-            $"up {Escape(Describe(uptime))}",
-        };
+            // What the card can encode. Whether a stream really goes out in it depends on the
+            // screen being in HDR at the time, which only a running stream knows; the log has why.
+            if (_encoder.AnyHdr) machine.Add("HDR");
+        }
 
-        machine.Add(_config.Upnp ? "<b class=warn>uPnP enabled</b>" : "uPnP disabled");
+        machine.Add($"{_games.Count()} games");
+
+        // Which controller bus is presenting the pads, left out entirely when there is none: a
+        // client whose controller does nothing has one question, and an absent line answers it.
+        if (_gamepads.IsAvailable) machine.Add(Escape(_gamepads.Driver));
+
+        machine.Add($"up {Escape(Describe(uptime))}");
+
+        if (_config.Upnp) machine.Add("uPnP");
 
         // A newer release, when the daily check has found one. Last on this line, because it is
         // news about the server rather than about the machine.
@@ -844,14 +843,12 @@ internal sealed class WebConsole : IAsyncDisposable
         ".titlerow h1{flex:none}" +
         "#host{flex:1;min-width:0;overflow:auto;scrollbar-width:none;white-space:nowrap}" +
         ".titlerow .gh{flex:none}" +
-        "#status b{color:var(--ink);font-weight:600}" +
-        "#status b.live{color:var(--live)}" +
-        "#status b.warn{color:var(--warn)}" +
-        // The one link in the status line, and the one thing on the page in a colour of its own:
+        "#status span.live{color:var(--live)}" +
+        // The one link on the host line, and the one thing on the page in a colour of its own:
         // a newer version is news, and news is allowed to stand out.
-        "#status a.update{color:var(--live);font-weight:600;text-decoration:none;" +
+        "#host a.update{color:var(--live);font-weight:600;text-decoration:none;" +
         "border:1px solid var(--green-line);border-radius:.3rem;padding:.05rem .45rem}" +
-        "#status a.update:hover{background:var(--update-hover)}" +
+        "#host a.update:hover{background:var(--update-hover)}" +
         ".dot{color:var(--fainter);margin:0 .15rem}" +
 
         // The grid: auto-fill with a minimum of about a hundred and forty pixels lands on five or

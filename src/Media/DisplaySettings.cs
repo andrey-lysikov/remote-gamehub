@@ -28,6 +28,11 @@ internal sealed class DisplayAdaptation : IDisposable
     // The screen's rectangle as it is now, which is what the mouse must be mapped onto.
     internal Rect Bounds { get; private set; }
 
+    // Whether this adaptation belongs to the given output — a caller handed one from earlier
+    // checks before trusting it for a screen that could have been re-resolved since.
+    internal bool IsFor(DisplayOutput output) =>
+        string.Equals(_deviceName, output.DeviceName, StringComparison.Ordinal);
+
     private DisplayAdaptation(string deviceName, Rect bounds, DisplayMode? previousMode,
                               bool? previousHdr, int? previousScale)
     {
@@ -42,7 +47,7 @@ internal sealed class DisplayAdaptation : IDisposable
     // that would not change is a stream at the wrong size, which is worth a warning and no more.
     internal static DisplayAdaptation Apply(DisplayOutput output, int width, int height, int fps,
                                             bool wantHdr, bool canEncodeHdr, bool enabled,
-                                            bool scaleForClient)
+                                            bool scaleForClient, bool isGame = false)
     {
         var name = output.DeviceName;
         DisplayMode? previousMode = null;
@@ -53,16 +58,30 @@ internal sealed class DisplayAdaptation : IDisposable
         {
             if (enabled)
             {
-                previousMode = ApplyMode(name, width, height, fps);
+                // HDR first: turning advanced color on or off was seen resetting this screen back
+                // to its own mode, which would silently undo a resolution change made before it.
                 previousHdr = ApplyHdr(name, wantHdr, canEncodeHdr);
+                previousMode = ApplyMode(name, width, height, fps);
 
-                // After the mode, and against the size the screen actually ended up at rather
-                // than the one asked for: the scaling is chosen from what is really being sent.
                 if (scaleForClient)
                 {
-                    var now = Current(name);
-                    if (now is not null) previousScale = ApplyScale(name, now.Width, now.Height,
-                                                                    width, height);
+                    // Against the mode the screen actually landed on, not the one asked for: the
+                    // driver's nearest match is what is really captured and sent, and its own size
+                    // above the ordinary desktop is what the scaling has to keep legible — not how
+                    // it compares to the client, which the screen may not have been able to match
+                    // at all. Read fresh now that HDR going first means a mode change here is not
+                    // still settling underneath it.
+                    var landed = Current(name);
+                    if (landed is not null)
+                        previousScale = ApplyScale(name, landed.Width, landed.Height);
+                }
+                else if (isGame)
+                {
+                    // Always 100%, whatever it happened to be left at by an earlier desktop
+                    // stream: a game reading a stale scale would draw its UI and cursor at the
+                    // wrong size for as long as it runs. The desktop stream is the only one this
+                    // server ever scales up.
+                    previousScale = ForceScale100(name);
                 }
             }
             else
@@ -79,11 +98,20 @@ internal sealed class DisplayAdaptation : IDisposable
                                      previousScale);
     }
 
-    // Scales the desktop up in the client's proportion of extra pixels, and returns the setting
-    // replaced or null. From 100%, not from the current one, which compounded stream by stream.
-    private static int? ApplyScale(string deviceName, int screenWidth, int screenHeight,
-                                   int clientWidth, int clientHeight)
+    // 1920x1080: the size desktop UI is drawn for. A screen no bigger than this reads fine at
+    // 100%; one above it needs the same proportion of extra scale to stay legible.
+    private const int ReferenceWidth = 1920;
+    private const int ReferenceHeight = 1080;
+
+    // Scales the desktop up in the screen's own proportion of extra pixels over the ordinary
+    // desktop size, stepped to the nearest 25% — not in the client's, which the screen may not
+    // have been able to match at all. Returns the setting replaced or null. From 100%, not the
+    // current one, which compounded stream by stream.
+    private static int? ApplyScale(string deviceName, int screenWidth, int screenHeight)
     {
+        if (screenWidth <= 0 || screenHeight <= 0) return null;
+        if (screenWidth <= ReferenceWidth && screenHeight <= ReferenceHeight) return null;
+
         var path = FindPath(deviceName);
         if (path is null) return null;
 
@@ -94,10 +122,7 @@ internal sealed class DisplayAdaptation : IDisposable
             return null;
         }
 
-        if (screenWidth <= 0 || screenHeight <= 0 || clientWidth <= 0 || clientHeight <= 0)
-            return null;
-
-        var ratio = Math.Min((double)clientWidth / screenWidth, (double)clientHeight / screenHeight);
+        var ratio = Math.Min((double)screenWidth / ReferenceWidth, (double)screenHeight / ReferenceHeight);
         var wanted = Nearest(100 * ratio, scale.Value.Maximum);
 
         if (wanted == scale.Value.Current) return null;
@@ -108,17 +133,40 @@ internal sealed class DisplayAdaptation : IDisposable
             return null;
         }
 
-        Log.Event($"the client's {clientWidth}x{clientHeight} against this screen's " +
-                 $"{screenWidth}x{screenHeight} is " +
-                 $"{ratio.ToString("0.00", CultureInfo.InvariantCulture)} times the pixels, " +
-                 $"so the desktop is scaled to {wanted}% for this stream; it was " +
-                 $"{scale.Value.Current}% and goes back to that afterwards");
+        Log.Event($"this screen's {screenWidth}x{screenHeight} is " +
+                 $"{ratio.ToString("0.00", CultureInfo.InvariantCulture)} times {ReferenceWidth}x" +
+                 $"{ReferenceHeight}, so the desktop is scaled to {wanted}% for this stream; it " +
+                 $"was {scale.Value.Current}% and goes back to that afterwards");
 
         return scale.Value.Current;
     }
 
-    // The percentage Windows offers nearest the one wanted, never below 100 and never above what
-    // the screen allows.
+    // A game gets none of the above: whatever the desktop stream before it left the scale at,
+    // put back to 100% before this one reads it. Returns the setting replaced or null.
+    private static int? ForceScale100(string deviceName)
+    {
+        var path = FindPath(deviceName);
+        if (path is null) return null;
+
+        var scale = DisplayControl.DpiScale(path.Value);
+        if (scale is null) return null;
+
+        if (scale.Value.Current == 100) return null;
+
+        if (!DisplayControl.SetDpiScale(path.Value, 100))
+        {
+            Log.Info("the desktop could not be scaled back to 100% for this game");
+            return null;
+        }
+
+        Log.Event($"the desktop was at {scale.Value.Current}% from an earlier stream; " +
+                 "put back to 100% for this game, and will return to that afterwards");
+
+        return scale.Value.Current;
+    }
+
+    // The percentage Windows offers nearest the one wanted, stepped in the usual 25%, never below
+    // 100 and never above what the screen allows.
     private static int Nearest(double percent, int maximum)
     {
         var best = 100;
@@ -183,11 +231,21 @@ internal sealed class DisplayAdaptation : IDisposable
         if (info is null) return null;
 
         var supported = (info.Value.Value & DisplayControl.AdvancedColorSupported) != 0;
+        var forceDisabled = (info.Value.Value & DisplayControl.AdvancedColorForceDisabled) != 0;
         var enabled = (info.Value.Value & DisplayControl.AdvancedColorEnabled) != 0;
 
         if (!supported)
         {
             if (wantHdr) Log.Info("the client asked for HDR; this screen does not do it");
+            return null;
+        }
+
+        // The same switch Settings itself withholds for this screen despite what its EDID claims.
+        // The raw API below would still turn it on if asked, into a state games do not trust.
+        if (forceDisabled)
+        {
+            if (wantHdr) Log.Info("the client asked for HDR; Windows will not offer it on this " +
+                                  "screen, so it is left in standard range");
             return null;
         }
 
