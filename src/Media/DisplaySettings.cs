@@ -65,15 +65,11 @@ internal sealed class DisplayAdaptation : IDisposable
 
                 if (scaleForClient)
                 {
-                    // Against the mode the screen actually landed on, not the one asked for: the
-                    // driver's nearest match is what is really captured and sent, and its own size
-                    // above the ordinary desktop is what the scaling has to keep legible — not how
-                    // it compares to the client, which the screen may not have been able to match
-                    // at all. Read fresh now that HDR going first means a mode change here is not
-                    // still settling underneath it.
-                    var landed = Current(name);
-                    if (landed is not null)
-                        previousScale = ApplyScale(name, landed.Width, landed.Height);
+                    // By the size the client asked for, not the mode the screen landed on: a
+                    // client up to 2K gets its desktop at 100% whatever the screen managed, and
+                    // one above 2K gets it scaled even when the screen could only go as far as
+                    // 2K or lower to meet it.
+                    previousScale = ApplyScale(name, width, height);
                 }
                 else if (isGame)
                 {
@@ -98,19 +94,24 @@ internal sealed class DisplayAdaptation : IDisposable
                                      previousScale);
     }
 
-    // 1920x1080: the size desktop UI is drawn for. A screen no bigger than this reads fine at
-    // 100%; one above it needs the same proportion of extra scale to stay legible.
+    // 1920x1080: the size desktop UI is drawn for, and what a client above 2K is measured
+    // against to find how much extra scale keeps the desktop legible.
     private const int ReferenceWidth = 1920;
     private const int ReferenceHeight = 1080;
 
-    // Scales the desktop up in the screen's own proportion of extra pixels over the ordinary
-    // desktop size, stepped to the nearest 25% — not in the client's, which the screen may not
-    // have been able to match at all. Returns the setting replaced or null. From 100%, not the
-    // current one, which compounded stream by stream.
-    private static int? ApplyScale(string deviceName, int screenWidth, int screenHeight)
+    // 2560x1440: the largest client that is streamed at 100%. Only a client strictly above this
+    // has the desktop scaled up.
+    private const int UnscaledWidth = 2560;
+    private const int UnscaledHeight = 1440;
+
+    // Sets the desktop scale for the client's size. A client that fits within 2K gets 100%
+    // whatever the screen was left at; one above 2K gets its own proportion of extra pixels
+    // over the ordinary desktop size, stepped to the nearest 25% — even when the screen could
+    // not match it and stayed at 2K or lower. Returns the setting replaced or null. From 100%,
+    // not the current one, which compounded stream by stream.
+    private static int? ApplyScale(string deviceName, int clientWidth, int clientHeight)
     {
-        if (screenWidth <= 0 || screenHeight <= 0) return null;
-        if (screenWidth <= ReferenceWidth && screenHeight <= ReferenceHeight) return null;
+        if (clientWidth <= 0 || clientHeight <= 0) return null;
 
         var path = FindPath(deviceName);
         if (path is null) return null;
@@ -122,8 +123,11 @@ internal sealed class DisplayAdaptation : IDisposable
             return null;
         }
 
-        var ratio = Math.Min((double)screenWidth / ReferenceWidth, (double)screenHeight / ReferenceHeight);
-        var wanted = Nearest(100 * ratio, scale.Value.Maximum);
+        var fitsUnscaled = clientWidth <= UnscaledWidth && clientHeight <= UnscaledHeight;
+        var ratio = fitsUnscaled
+            ? 1.0
+            : Math.Min((double)clientWidth / ReferenceWidth, (double)clientHeight / ReferenceHeight);
+        var wanted = fitsUnscaled ? 100 : Nearest(100 * ratio, scale.Value.Maximum);
 
         if (wanted == scale.Value.Current) return null;
 
@@ -133,10 +137,15 @@ internal sealed class DisplayAdaptation : IDisposable
             return null;
         }
 
-        Log.Event($"this screen's {screenWidth}x{screenHeight} is " +
-                 $"{ratio.ToString("0.00", CultureInfo.InvariantCulture)} times {ReferenceWidth}x" +
-                 $"{ReferenceHeight}, so the desktop is scaled to {wanted}% for this stream; it " +
-                 $"was {scale.Value.Current}% and goes back to that afterwards");
+        if (fitsUnscaled)
+            Log.Event($"the client's {clientWidth}x{clientHeight} is within {UnscaledWidth}x" +
+                     $"{UnscaledHeight}, so the desktop is put to 100% for this stream; it was " +
+                     $"{scale.Value.Current}% and goes back to that afterwards");
+        else
+            Log.Event($"the client's {clientWidth}x{clientHeight} is " +
+                     $"{ratio.ToString("0.00", CultureInfo.InvariantCulture)} times {ReferenceWidth}x" +
+                     $"{ReferenceHeight}, so the desktop is scaled to {wanted}% for this stream; it " +
+                     $"was {scale.Value.Current}% and goes back to that afterwards");
 
         return scale.Value.Current;
     }
