@@ -21,24 +21,31 @@ internal static class Program
     private static bool Asked(string[] args, string name) =>
         args.Any(a => a.Equals(name, StringComparison.OrdinalIgnoreCase));
 
-    // The service's own log: next to the executable, under a name of its own. Two processes under
-    // two accounts appending to one file lose lines, so the service never shares the server's.
-    private static void StartServiceLog() =>
-        Log.Start(ServiceControl.LogDirectory, ServiceControl.LogFallbackDirectory, Version,
-                  AppParameters.Identity.ServiceLogFile);
-
     // Whether this is the copy the service started, decided by its argument alone: a worker that
     // guessed wrong would exit for the running service and be restarted for ever. Kept for exit.
     private static bool _isWorker;
 
+    // The log where the server keeps its own, which is the signed-in person's profile when this
+    // process is SYSTEM (the service, or the worker it starts) and the caller's own otherwise.
+    private static void StartLog()
+    {
+        if (PlatformGuard.IsSystem)
+        {
+            AppConfig.ProfileDirectoryOverride = UserContext.ConsoleUserLocalAppData();
+        }
+
+        Log.Start(AppConfig.ResolveDirectory(), AppConfig.FallbackDirectory, Version);
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
-        // The service half, which streams nothing and holds no ports. Decided before anything is
-        // opened, because it logs somewhere else and reads no configuration at all.
+        // The service half, which streams nothing and holds no ports. It writes into the server's
+        // log under its own name, and moves with it when the worker is started for another person.
         if (Asked(args, "--service"))
         {
-            StartServiceLog();
+            StartLog();
+            Log.SetSource("service");
             Log.SetVerbose(true);
             return ServiceHost.Run();
         }
@@ -47,22 +54,15 @@ internal static class Program
         // verbs for the person who would rather set it up once by hand or take it away for good.
         if (Asked(args, "install-service") || Asked(args, "uninstall-service"))
         {
-            StartServiceLog();
+            StartLog();
             return Asked(args, "install-service") ? ServiceControl.Install() : ServiceControl.Uninstall();
         }
 
         _isWorker = Asked(args, "--worker");
 
-        // Started by the service this process is LocalSystem, which is nobody's profile, so the
-        // configuration and the log go into the signed-in person's: the same files as an ordinary run.
-        if (PlatformGuard.IsSystem)
-        {
-            AppConfig.ProfileDirectoryOverride = UserContext.ConsoleUserLocalAppData();
-        }
-
-        // The very first statement after that: everything from here on, including every refusal,
-        // has somewhere to be written. The log sits beside the configuration.
-        Log.Start(AppConfig.ResolveDirectory(), AppConfig.FallbackDirectory, Version);
+        // The very first statement: everything from here on, including every refusal, has
+        // somewhere to be written. The log sits beside the configuration.
+        StartLog();
 
         // Said at once, and by the copy the service started above all: it is a different account
         // from the person at the machine, so "the log" is not necessarily the file they have open.
@@ -160,8 +160,8 @@ internal static class Program
                     Log.Warn(
                         "The service was started but the server has not appeared, and this copy " +
                         "is about to exit.\n" +
-                        "What the service did is in its own log, which is not this file:\n" +
-                        $"    {ServiceControl.LogPath}\n" +
+                        "What the service did is in this same file, on the lines marked " +
+                        "\"service:\".\n" +
                         "This copy is running the server itself instead, so the machine is not " +
                         "left with nothing.");
 
@@ -477,6 +477,11 @@ internal static class Program
         // to a socket that does not exist yet.
         var forwarding = new PortForwarding(config);
         forwarding.Start();
+
+        // Whether Windows will sign the person in again after a restart, and a notification when
+        // it will not. Off this thread: it asks Windows about the account, which takes a moment.
+        var statusPage = $"http://localhost{(config.WebPort == 80 ? string.Empty : $":{config.WebPort}")}/";
+        _ = Task.Run(() => AutoLogon.NoticeAtStart(tray, () => Open(statusPage)));
 
         // The pictures the client shows beside each game, started here rather than inside the scan:
         // a large library can take minutes, and none of it should hold up a client connecting now.

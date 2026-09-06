@@ -15,11 +15,9 @@ internal static class AppParameters
         // Base name of the executable, the log and the configuration file.
         internal const string FileBase = "Remote-Gamehub";
 
+        // One file for the launcher, the worker and the service alike; the service's lines are
+        // marked. Appends are atomic (see Log.Append), so the three do not lose each other's lines.
         internal const string LogFile = FileBase + ".log";
-
-        // The service's own log: two processes under two accounts appending to one file lose lines.
-        // Not FileBase-prefixed, since it sits beside the exe next to the server's own log.
-        internal const string ServiceLogFile = "service.log";
         internal const string ConfFile = FileBase + ".conf";
 
         // Folder created under %LOCALAPPDATA% for an installed copy, and the one the installer

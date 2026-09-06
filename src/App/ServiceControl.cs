@@ -202,20 +202,6 @@ internal static class ServiceControl
         return false;
     }
 
-    // Where the service writes its own log, which is not the server's: beside the executable, the
-    // one folder both agree on. The server's log follows the configuration into a profile.
-    internal static string LogDirectory => AppContext.BaseDirectory;
-
-    // Where it goes when the folder holding the executable cannot be written to — a read-only
-    // installation, an unusual set of permissions. Never reached on an ordinary machine.
-    internal static string LogFallbackDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        AppParameters.Identity.DataFolder);
-
-    // The file itself, for the one message that has to send somebody to it.
-    internal static string LogPath =>
-        Path.Combine(LogDirectory, AppParameters.Identity.ServiceLogFile);
-
     // ------------------------------------------------------------------ the command-line verbs
 
     // Kept for the person who would rather set it up once by hand, or take it away for good. The

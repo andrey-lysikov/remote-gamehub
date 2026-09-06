@@ -202,7 +202,7 @@ internal static class ServiceHost
                         $"The server would not stay running: {failures} attempts, each of them " +
                         "over in seconds.\n" +
                         "The service is stopping rather than starting it again and again. Why it " +
-                        "refuses is in its own log, which is beside its configuration file.\n" +
+                        "refuses is in this log, on the lines the server wrote.\n" +
                         "Starting the application again is what tries once more.");
 
                     Stopping.Set();
@@ -212,7 +212,7 @@ internal static class ServiceHost
                 Log.Warn($"the worker ended after " +
                          $"{lived.TotalSeconds:0} s; it will be started again" +
                          (backoff > TimeSpan.Zero ? $" in {backoff.TotalSeconds:0} s" : " now") +
-                         ". Its own log says why it stopped.");
+                         ". Its own lines above say why it stopped.");
             }
 
             // Whether there is anybody to stream for, said only when the answer changes and never
@@ -238,6 +238,7 @@ internal static class ServiceHost
             if (_worker == 0 && ready && DateTime.UtcNow - startedAt >= backoff)
             {
                 startedAt = DateTime.UtcNow;
+                FollowSession(target);
                 _worker = SessionLauncher.StartServerAsSystem(target, "--worker");
                 workerSession = _worker == 0 ? Wtsapi32.NoSession : target;
 
@@ -257,7 +258,7 @@ internal static class ServiceHost
                 if (_worker == 0 && ++failures >= GiveUpAfter)
                 {
                     Log.Warn($"The server could not be started {failures} times running. The " +
-                             "service is stopping; this service's own log has the reason.");
+                             "service is stopping; the reason is in the lines above.");
 
                     Stopping.Set();
                     break;
@@ -268,6 +269,23 @@ internal static class ServiceHost
             // change nothing, so the answer is re-read rather than acted on — no needless restarts.
             WaitHandle.WaitAny(Wakes, 1000);
         }
+    }
+
+    // Moves this log into the profile of the person signed in to the session the worker is about
+    // to serve: the worker writes there too, so the two halves land in one file.
+    private static void FollowSession(uint session)
+    {
+        var profile = UserContext.LocalAppDataOf(session);
+        if (profile is null ||
+            string.Equals(profile, AppConfig.ProfileDirectoryOverride, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        AppConfig.ProfileDirectoryOverride = profile;
+        Log.MoveTo(AppConfig.ResolveDirectory(), AppConfig.FallbackDirectory,
+                   $"the service's log continues in the profile of the person signed in to " +
+                   $"session {session}");
     }
 
     // The session the server belongs in now, or NoSession with the reason: the console when
