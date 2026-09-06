@@ -3,6 +3,7 @@
 
 using System.Globalization;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using RemoteGameHub.App;
@@ -80,7 +81,7 @@ internal sealed class WebConsole : IAsyncDisposable
         }
 
         _accepting = Task.Run(AcceptLoop);
-        Log.Info($"the page is at http://{LocalAddress()}" +
+        Log.Info($"the page is at http://{LocalAddress(_config)}" +
                  (_config.WebPort == 80 ? string.Empty : $":{_config.WebPort}") + "/");
     }
 
@@ -187,6 +188,15 @@ internal sealed class WebConsole : IAsyncDisposable
 
             await WriteAsync(stream, 200, "text/plain",
                 rescan is null ? "The scan is not ready yet." : "Scanning…");
+            return;
+        }
+
+        // Windows' own sign-in settings, opened on the machine's screen; and the state, for the
+        // page to notice the switch being made there. The password never comes this way.
+        if (request.Query("autologon") is { } ask)
+        {
+            await WriteAsync(stream, 200, "text/plain",
+                ask == "setup" ? AutoLogon.OpenWindowsSettings() : AutoLogonState());
             return;
         }
 
@@ -510,6 +520,25 @@ internal sealed class WebConsole : IAsyncDisposable
                     "<button id=paircancel>Cancel</button>" +
                     "<span id=said class=q></span></div></section>");
 
+        // Only when the start-up check found the host unreachable after a restart: what that
+        // means, what it costs to change, and the button that opens Windows' own window for it.
+        if (AutoLogon.Last is { State: AutoLogon.State.Off } off && AutoLogonState() == "off")
+        {
+            body.Append("<section id=autologon class=card>" +
+                        "<p><b>Windows does not sign you in by itself.</b> Your account has a " +
+                        "password, so after a restart this host cannot be reached until somebody " +
+                        "signs in at the machine.</p>" +
+                        $"<p>Windows can sign <b>{Escape(off.Account)}</b> in automatically. The " +
+                        "password is typed into Windows' own settings window and kept by Windows; " +
+                        "this server never sees it. Understand what that means first: anybody who " +
+                        "switches the machine on lands on that desktop without a password, and a " +
+                        "BitLocker drive with no start-up PIN unlocks on its own with it. Locking " +
+                        "the screen right after sign-in keeps the machine shut while this host " +
+                        "stays reachable: the lock screen is streamed and unlocked from the client.</p>" +
+                        "<div class=row><button id=alopen class=primary>Open Windows sign-in " +
+                        "settings</button><span id=alsaid class=q></span></div></section>");
+        }
+
         // Above the list, because it is about the whole list rather than about any tile in it.
         // The same thing the tray menu does, put where somebody looking at the games already is.
         body.Append("<div class=\"row end\" id=gamestools>" +
@@ -587,6 +616,20 @@ internal sealed class WebConsole : IAsyncDisposable
 
         body.Append(Script);
         return body.ToString();
+    }
+
+    // "on" or "off" from the registry alone, which is cheap enough to answer a poll with; a
+    // refusal to read counts as off, so the offer stays on the page rather than vanishing.
+    private static string AutoLogonState()
+    {
+        try
+        {
+            return AutoLogon.IsOn(out _) ? "on" : "off";
+        }
+        catch (Exception)
+        {
+            return "off";
+        }
     }
 
     // The palette the page wears, from this machine's theme for applications. Read on every
@@ -740,18 +783,44 @@ internal sealed class WebConsole : IAsyncDisposable
         return false;
     }
 
-    private static string LocalAddress()
+    private static string LocalAddress(AppConfig config)
     {
+        // The address a person types is the one bound to, when there is one: no guessing which of
+        // several the client will reach.
+        if (!string.IsNullOrWhiteSpace(config.BindAddress) &&
+            config.BindAddress != IPAddress.Any.ToString())
+        {
+            return config.BindAddress;
+        }
+
+        // The first real IPv4 of an interface that is up: not a routing-table guess against one
+        // fixed gateway, which named the wrong address on a network that is not 192.168.x.
         try
         {
-            using var probe = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            probe.Connect("192.168.1.1", 9);
-            return (probe.LocalEndPoint as IPEndPoint)?.Address.ToString() ?? "this machine";
+            foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (adapter.OperationalStatus != OperationalStatus.Up) continue;
+                if (adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+
+                foreach (var ip in adapter.GetIPProperties().UnicastAddresses)
+                {
+                    if (ip.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+
+                    var bytes = ip.Address.GetAddressBytes();
+
+                    // Not an APIPA address (169.254.x): that one means the network is not up yet,
+                    // and printing it sends the next person hunting an address nobody answers on.
+                    if (bytes[0] == 169 && bytes[1] == 254) continue;
+
+                    return ip.Address.ToString();
+                }
+            }
         }
         catch (Exception)
         {
-            return "this machine";
         }
+
+        return "this machine";
     }
 
     // ------------------------------------------------------------------ plumbing
@@ -1052,6 +1121,17 @@ internal sealed class WebConsole : IAsyncDisposable
         "if(theme&&document.documentElement.dataset.theme!==theme)document.documentElement.dataset.theme=theme;" +
         "},1000);" +
         "if(!card.classList.contains('off'))devname.focus();" +
+
+        // --- automatic sign-in: the button opens Windows' window on the machine, and the page
+        // then asks every few seconds whether the switch was made there ---
+        "const al=$('autologon');if(al){$('alopen').addEventListener('click',async e=>{" +
+        "e.target.disabled=true;" +
+        "$('alsaid').textContent=await (await fetch('/?autologon=setup')).text();" +
+        "const until=Date.now()+600000;const poll=setInterval(async()=>{" +
+        "if(Date.now()>until){clearInterval(poll);e.target.disabled=false;return;}" +
+        "if((await (await fetch('/?autologon=state')).text()).trim()==='on'){clearInterval(poll);" +
+        "al.innerHTML='<p>Automatic sign-in is on now. This host comes back on its own after a restart.</p>';}" +
+        "},5000);});}" +
 
         // --- the log drawer ---
         "const logbox=$('logbox'),log=$('log');" +

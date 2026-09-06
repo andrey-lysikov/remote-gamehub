@@ -44,6 +44,14 @@ internal sealed class ServiceDiscovery : IDisposable
     private UdpClient? _socket;
     private Task? _listening;
 
+    // The last time each asking address was written to the log, so a client polling several times
+    // a second is one line now and then rather than a page of them. Keyed by address, not endpoint.
+    private readonly Dictionary<string, long> _lastAskLogged = new();
+    private const long AskLogQuietMs = 30_000;
+
+    // Coalesces a burst of address changes (a cable in, an address handed out) into one re-announce.
+    private long _lastReannounce;
+
     internal ServiceDiscovery(AppConfig config, HostIdentity identity)
     {
         _config = config;
@@ -75,6 +83,20 @@ internal sealed class ServiceDiscovery : IDisposable
 
         Announce();
         Log.Info($"announcing \"{_instanceName}\" on port {_config.HttpPort} for automatic discovery");
+
+        // The first announce can go out before the network is up, on an APIPA address nobody
+        // reaches; re-announced when an address appears or changes, so a client can find it then.
+        NetworkChange.NetworkAddressChanged += OnNetworkChanged;
+    }
+
+    private void OnNetworkChanged(object? sender, EventArgs e)
+    {
+        var now = Environment.TickCount64;
+        if (now - _lastReannounce < 2000) return;
+        _lastReannounce = now;
+
+        Log.Info("a network address changed; announcing this machine again for automatic discovery");
+        Announce();
     }
 
     private UdpClient OpenSocket()
@@ -160,9 +182,18 @@ internal sealed class ServiceDiscovery : IDisposable
             {
                 if (!Asks(received.Buffer)) continue;
 
-                // Logged for one reason: when a client does not find this machine, the question is
-                // whether its query ever arrived — multicast is the first thing a network segments.
-                Log.Info($"discovery: {Peer.Describe(received.RemoteEndPoint)} asked for this service");
+                // Whether a client's query arrived at all, which is what a client not finding this
+                // machine turns on. Once per asker in a while: a browser queries many times a second.
+                var asker = Peer.Describe((received.RemoteEndPoint as IPEndPoint)?.Address);
+                bool sayIt;
+                lock (_lastAskLogged)
+                {
+                    var now = Environment.TickCount64;
+                    sayIt = !_lastAskLogged.TryGetValue(asker, out var last) || now - last > AskLogQuietMs;
+                    if (sayIt) _lastAskLogged[asker] = now;
+                }
+
+                if (sayIt) Log.Info($"discovery: {asker} asked for this service");
 
                 // Answered twice, deliberately: the shared record belongs on the group, but a
                 // query that crossed a segment not forwarding multicast back needs the unicast.
@@ -385,6 +416,7 @@ internal sealed class ServiceDiscovery : IDisposable
 
     public void Dispose()
     {
+        NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         _stopping.Cancel();
         _socket?.Dispose();
 
