@@ -82,9 +82,11 @@ internal sealed class GameLibrary
             if (!enabled) continue;
 
             var games = new List<ScannedGame>();
+            var scanned = 0;
 
             foreach (var game in scan())
             {
+                scanned++;
                 var key = TitleKey(game.Title);
 
                 if (claimed.TryGetValue(key, out var owner))
@@ -103,7 +105,12 @@ internal sealed class GameLibrary
             }
 
             found.AddRange(games);
-            counts.Add($"{games.Count} from {name}");
+
+            // New games, and how many were found in all: "0 from Steam" beside three manifests
+            // reads as a broken scan, when it only means all three were already known.
+            counts.Add(scanned == games.Count
+                ? $"{games.Count} from {name}"
+                : $"{games.Count} new of {scanned} from {name}");
         }
 
         // One stamp for the whole scan, so that "touched by this scan" is an equality test. The

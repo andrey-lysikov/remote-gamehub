@@ -33,6 +33,14 @@ internal sealed unsafe class CursorPainter
     private int _x;
     private int _y;
 
+    // Whether the duplication now open has said anything about the pointer yet. Until it does,
+    // the position above belongs to the desktop that went away: a prompt's, or the one behind it.
+    private volatile bool _duplicationReported;
+
+    // Set when the duplication is opened again, so the thread below moves desktops at once rather
+    // than at its next scheduled look: the pointer would otherwise be read off the old desktop.
+    private volatile bool _desktopMoved;
+
     // Why the last frame carried no pointer, as a short key rather than the sentence: the sentence
     // holds coordinates, and comparing those made every pixel of movement a new line in the log.
     private string? _silence;
@@ -78,7 +86,7 @@ internal sealed unsafe class CursorPainter
     }
 
     // The frame drawn into and where it sits on the desktop, told again whenever the duplication is
-    // opened. The silence is cleared with it: the old size may have been the reason for it.
+    // opened. What the old duplication said about the pointer is forgotten with it.
     internal void FrameIs(int width, int height, Rect bounds)
     {
         _width = width;
@@ -86,6 +94,11 @@ internal sealed unsafe class CursorPainter
         _left = bounds.Left;
         _top = bounds.Top;
         _silence = null;
+
+        // A UAC prompt or the lock screen is another desktop: the position the old duplication
+        // gave is where the pointer was there, and a new one may never report (no mouse, Winlogon).
+        _duplicationReported = false;
+        _desktopMoved = true;
 
         if (_noMouseHere)
         {
@@ -124,7 +137,9 @@ internal sealed unsafe class CursorPainter
     {
         // GetCursorInfo answers for the desktop this thread is on, and a stale one answers with no
         // pointer state at all — flags and position zero — which reads as a desktop with no pointer.
-        Session.InputDesktop.Attach();
+        var moved = _desktopMoved;
+        _desktopMoved = false;
+        Session.InputDesktop.Attach(force: moved);
 
         var info = new CursorInfo { Size = sizeof(CursorInfo) };
         if (!User32.GetCursorInfo(ref info)) return;
@@ -203,6 +218,7 @@ internal sealed unsafe class CursorPainter
     {
         _x = x;
         _y = y;
+        _duplicationReported = true;
     }
 
     // A new shape, in the form the duplication hands it over. Called only when it changed, which
@@ -228,9 +244,9 @@ internal sealed unsafe class CursorPainter
     // frame is copied: inside a game there is no pointer, and copying to change nothing is 4 GB/s.
     internal bool Wanted(bool visible, out nint cursor, out int x, out int y)
     {
-        // The duplication only while it is really reporting a pointer: a shape it handed over once
-        // would otherwise be drawn for ever at the place the reports stopped, which is where they come from.
-        if (_cursor != 0 && visible)
+        // The duplication only while the one now open is really reporting a pointer: a shape and a
+        // place from before a reopen would otherwise be drawn for ever where the reports stopped.
+        if (_cursor != 0 && visible && _duplicationReported)
         {
             Source("the duplication");
 

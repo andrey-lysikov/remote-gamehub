@@ -15,9 +15,13 @@ internal static class UserContext
 {
     // The console user's LocalAppData, resolved through their own token so redirected profiles
     // land in the right place. Null when nobody is signed in or the token cannot be had.
-    internal static string? ConsoleUserLocalAppData()
+    internal static string? ConsoleUserLocalAppData() => LocalAppDataOf(Wtsapi32.ServedSessionId());
+
+    // The same for whoever is signed in to the given session: the service asks for the session it
+    // is about to start the worker in, so its log lands in the same profile as the worker's.
+    internal static string? LocalAppDataOf(uint session)
     {
-        var token = OpenConsoleUserToken();
+        var token = OpenSessionToken(session);
         if (token == 0) return null;
 
         try
@@ -141,8 +145,12 @@ internal static class UserContext
         }
     }
 
-    // The primary token of whoever is signed in to the console, or zero. The caller owns it.
-    private static nint OpenConsoleUserToken()
+    // The token of whoever is signed in to this process's own session, not the console's: over
+    // remote desktop the console is an empty sign-in screen, and the worker sits with the person.
+    private static nint OpenConsoleUserToken() => OpenSessionToken(Wtsapi32.ServedSessionId());
+
+    // The primary token of whoever is signed in to the session, or zero. The caller owns it.
+    private static nint OpenSessionToken(uint session)
     {
         // Only LocalSystem may ask, and only it needs to: an ordinary run is already the user.
         if (!PlatformGuard.IsSystem) return 0;
@@ -151,9 +159,6 @@ internal static class UserContext
         // the configuration and the log would move to SYSTEM's profile under System32.
         SessionLauncher.EnablePrivileges();
 
-        // This process's own session, not the console's: over remote desktop the console is a
-        // sign-in screen with nobody on it, and the worker was put where the person is.
-        var session = Wtsapi32.ServedSessionId();
         if (session == Wtsapi32.NoSession) return 0;
 
         if (Wtsapi32.WTSQueryUserToken(session, out var token)) return token;

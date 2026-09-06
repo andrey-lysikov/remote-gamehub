@@ -269,6 +269,10 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         // size the frame is now: a mode change is exactly what moves the edge it is clipped to.
         _cursor?.FrameIs(Width, Height, _bounds);
 
+        // What the last duplication said about the pointer being shown was said of another desktop
+        // or another mode; this one says so itself, on its first frame that carries a mouse update.
+        _pointerVisible = false;
+
         // Off only when there is nothing to draw the pointer with; see CreateFrameTexture for
         // where GDI writes it either way.
         _drawPointer = _cursor is not null;

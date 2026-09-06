@@ -60,7 +60,9 @@ internal sealed class SessionWatch : IDisposable
 
         if (!changed) return;
 
-        Log.Warn($"the session changed ({e.Reason}). {Describe()}");
+        // An event, not a warning: this is what the server was asked to sit through, and it is
+        // said only when the answer to "can the console be streamed" actually turned over.
+        Log.Event($"the session changed ({e.Reason}). {Describe()}");
         Changed?.Invoke(this);
     }
 

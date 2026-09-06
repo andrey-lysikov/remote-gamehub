@@ -170,15 +170,29 @@ internal static class XboxScanner
         }
     }
 
+    private const string PackagesSubPath =
+        @"Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
+
+    // As SYSTEM the scan impersonates the person, but the HKCU\Software\Classes symlink can still
+    // resolve to SYSTEM's own Classes, which has no games: so the person's hive is opened by SID.
+    private static RegistryKey? OpenPackages()
+    {
+        if (App.PlatformGuard.IsSystem && App.UserContext.ConsoleUserSid() is { } sid)
+        {
+            var byUser = Registry.Users.OpenSubKey($@"{sid}_Classes\{PackagesSubPath}");
+            if (byUser is not null) return byUser;
+        }
+
+        return Registry.CurrentUser.OpenSubKey($@"Software\Classes\{PackagesSubPath}");
+    }
+
     // The family name is the identity name plus a publisher hash, absent from the config. It comes
     // from the AppModel key, whose names are Name_Version_Architecture_ResourceId_PublisherHash.
     private static string? ResolveFamilyName(string identityName)
     {
         try
         {
-            using var packages = Registry.CurrentUser.OpenSubKey(
-                @"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion" +
-                @"\AppModel\Repository\Packages");
+            using var packages = OpenPackages();
 
             if (packages is null) return null;
 

@@ -446,7 +446,9 @@ internal sealed class AudioStream : IDisposable
     // milliseconds is the fault, one every five the cure, and nothing else here can show it.
     private sealed class PacingReport
     {
-        private static readonly TimeSpan Every = TimeSpan.FromSeconds(10);
+        // A minute, not ten seconds: an idle desktop's audio loop has nothing new to say six
+        // times as often, and a stream that is working says so once is enough.
+        private static readonly TimeSpan Every = TimeSpan.FromSeconds(60);
 
         private readonly System.Diagnostics.Stopwatch _clock =
             System.Diagnostics.Stopwatch.StartNew();
@@ -476,6 +478,17 @@ internal sealed class AudioStream : IDisposable
 
             var elapsed = now - _since;
             if (elapsed < Every) return;
+
+            // An idle desktop sends no audio, and "sent 0 packets" once a minute for hours says
+            // nothing: the window is reset and passed over. A stream with sound still reports.
+            if (_packets == 0)
+            {
+                _since = now;
+                _turns = 0;
+                _gapSum = 0;
+                _gapMax = 0;
+                return;
+            }
 
             var seconds = Math.Max(1.0, elapsed.TotalSeconds);
             var mean = _turns > 1 ? _gapSum / (_turns - 1) : 0;

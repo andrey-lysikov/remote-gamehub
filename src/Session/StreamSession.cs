@@ -509,6 +509,18 @@ internal sealed class StreamSession : IDisposable
     // same thing many times, and answering each broke the stream rather than mending it.
     private static readonly TimeSpan BetweenKeyFrames = TimeSpan.FromMilliseconds(250);
 
+    // The gap while the client is reporting loss. A key frame is the largest thing on the wire, so
+    // on a link already dropping packets it feeds the very congestion it is asked for: rationed hard.
+    private static readonly TimeSpan BetweenKeyFramesUnderLoss = TimeSpan.FromMilliseconds(1500);
+
+    // How long after a loss report the harder rationing stays on. A little past the report period,
+    // so a run of lossy frames keeps it on rather than flapping between the two gaps.
+    private static readonly TimeSpan LossFreshFor = TimeSpan.FromSeconds(2);
+
+    // Client-vs-screen size pairs already warned about, so the same mismatch is not written into
+    // the log at the top of every stream. Process-wide: a stream is a new instance each time.
+    private static readonly HashSet<(int, int, int, int)> SizeMismatchWarned = new();
+
     // How long an unchanged picture may go unsent. Well inside the seven seconds a client waits
     // before deciding the host has stopped, and long enough that an idle desktop costs nothing.
     private static readonly TimeSpan StillFrameEvery = TimeSpan.FromMilliseconds(500);
@@ -642,6 +654,10 @@ internal sealed class StreamSession : IDisposable
     // Packets the client says it did not receive, since the report last looked.
     private int _packetsLost;
 
+    // When the client last reported loss, as stopwatch ticks. Read on the capture thread to decide
+    // how hard to ration key frames; written on the control thread, so through Volatile.
+    private long _lastLossTicks;
+
     // Whether this stream carries a pointer of this server's drawing. See where it is set.
     private bool _drawPointer;
 
@@ -720,6 +736,7 @@ internal sealed class StreamSession : IDisposable
                 $"the client reports {lost} lost packet(s) over {overMs} ms; " +
                 $"the last frame it had whole was {lastGoodFrame}");
 
+            Volatile.Write(ref _lastLossTicks, _clock.Elapsed.Ticks);
             Interlocked.Add(ref _packetsLost, lost);
         };
 
@@ -843,11 +860,16 @@ internal sealed class StreamSession : IDisposable
             {
                 // There is no scaler here: what the card captured is what it encodes. The client
                 // reads the real size out of the stream; the line is for the person wondering.
-                Log.Warn(
-                    $"The client asked for {_negotiation.Width}x{_negotiation.Height} and this\n" +
-                    $"screen is {duplicator.Width}x{duplicator.Height}. The screen's own size is\n" +
-                    "what is sent: this server does not scale the picture. Set the client's\n" +
-                    "resolution to match the screen to avoid the client scaling it instead.");
+                var pair = (_negotiation.Width, _negotiation.Height, duplicator.Width, duplicator.Height);
+                bool firstTime;
+                lock (SizeMismatchWarned) firstTime = SizeMismatchWarned.Add(pair);
+
+                if (firstTime)
+                    Log.Warn(
+                        $"The client asked for {_negotiation.Width}x{_negotiation.Height} and this\n" +
+                        $"screen is {duplicator.Width}x{duplicator.Height}. The screen's own size is\n" +
+                        "what is sent: this server does not scale the picture. Set the client's\n" +
+                        "resolution to match the screen to avoid the client scaling it instead.");
             }
 
             try
@@ -1157,11 +1179,13 @@ internal sealed class StreamSession : IDisposable
 
                 lastSent = now;
 
-                // Rationed: a key frame is twenty times the size of an ordinary one, and answering
-                // every request filled the line with them and left the stream broken until it closed.
+                // Rationed, and harder while the client reports loss: a key frame is the largest
+                // thing on the wire, and answering every request left the stream broken until closed.
+                var underLoss = now - TimeSpan.FromTicks(Volatile.Read(ref _lastLossTicks)) < LossFreshFor;
+                var keyFrameGap = underLoss ? BetweenKeyFramesUnderLoss : BetweenKeyFrames;
                 var wantKeyFrame = _keyFrameWanted &&
                                    (lastKeyFrame == TimeSpan.MinValue ||
-                                    now - lastKeyFrame >= BetweenKeyFrames);
+                                    now - lastKeyFrame >= keyFrameGap);
 
                 if (wantKeyFrame)
                 {

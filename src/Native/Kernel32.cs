@@ -23,6 +23,13 @@ internal static unsafe class Kernel32
     internal const uint FILE_SHARE_READ = 0x00000001;
     internal const uint FILE_SHARE_WRITE = 0x00000002;
     internal const uint OPEN_EXISTING = 3;
+    internal const uint OPEN_ALWAYS = 4;
+    internal const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
+
+    // Append-only access: the kernel puts every write after everybody else's, whatever the offset,
+    // which is what lets the service, the launcher and the worker share one log file.
+    internal const uint FILE_APPEND_DATA = 0x00000004;
+    internal const int ERROR_ALREADY_EXISTS = 183;
     internal const uint FILE_FLAG_OVERLAPPED = 0x40000000;
 
     internal const int ERROR_IO_PENDING = 997;
@@ -52,6 +59,11 @@ internal static unsafe class Kernel32
         SafeFileHandle device, uint controlCode,
         void* input, int inputSize, void* output, int outputSize,
         int* returned, NativeOverlapped* overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool WriteFile(SafeFileHandle file, byte* buffer, uint bytes,
+                                          out uint written, nint overlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

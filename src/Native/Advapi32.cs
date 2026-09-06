@@ -102,6 +102,20 @@ internal static class Advapi32
 
     internal const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
 
+    // LogonUser as at the keyboard, and what it answers to an empty password: refused as wrong,
+    // refused because blank passwords may not be used from here, or refused for being stale.
+    internal const uint LOGON32_LOGON_INTERACTIVE = 2;
+    internal const uint LOGON32_PROVIDER_DEFAULT = 0;
+    internal const int ERROR_LOGON_FAILURE = 1326;
+    internal const int ERROR_ACCOUNT_RESTRICTION = 1327;
+    internal const int ERROR_PASSWORD_EXPIRED = 1330;
+    internal const int ERROR_PASSWORD_MUST_CHANGE = 1907;
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "LogonUserW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool LogonUser(string user, string? domain, string password,
+                                          uint logonType, uint provider, out nint token);
+
     // For the cmd.exe that stands in for ShellExecute when a game is started: without it a console
     // window flashes on the player's screen, and on a stream that is a black rectangle mid-frame.
     internal const uint CREATE_NO_WINDOW = 0x08000000;

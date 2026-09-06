@@ -173,10 +173,11 @@ internal sealed class ClientInput
                 case MagicScroll: Controller(body); break;
 
                 default:
-                    // Once per kind, not per packet: a pad with a gyroscope sends a type this
-                    // switch does not know at its sensor rate, and each line is a file opened.
+                    // Once per kind, not per packet, and with the bytes so an unknown packet can be
+                    // named from the log: a pad's gyroscope sends an unhandled type at sensor rate.
                     if (firstOfItsKind)
-                        Log.Input($"input type 0x{magic:X} ({payload.Length} bytes) is not handled");
+                        Log.Input($"input type 0x{magic:X} ({payload.Length} bytes) is not handled: " +
+                                  Convert.ToHexString(payload));
                     break;
             }
         }
@@ -659,10 +660,18 @@ internal sealed class ClientInput
         // here rather than Marshal.SizeOf, which is a type lookup on a path that runs at input rate.
         var sent = User32.SendInput((uint)events.Length, events[0], RecordBytes);
 
+        if (sent == 0)
+        {
+            // Nothing went in, which is what a thread gets on a desktop that has just lost the
+            // input: a prompt took it to Winlogon between two looks. Moved now, and asked once more.
+            InputDesktop.Attach(force: true);
+            sent = User32.SendInput((uint)events.Length, events[0], RecordBytes);
+        }
+
         if (sent != events.Length)
         {
-            // The usual cause is a more privileged window in the foreground — a UAC prompt, or
-            // the secure desktop — which this server cannot type into whatever rights it has.
+            // Still refused: a more privileged window is in the foreground and this server is not
+            // LocalSystem, so the secure desktop is one it cannot type into whatever it does.
             Log.Input($"Windows accepted {sent} of {events.Length} input events");
         }
     }
