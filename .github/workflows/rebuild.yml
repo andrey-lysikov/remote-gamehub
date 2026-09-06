@@ -1,9 +1,7 @@
 name: Rebuild
 
-# Replaces the files attached to a release with ones built from the current state of the branch.
-# Started by hand only: the version, the tag and the description of the release stay as they are —
-# the only thing that changes is the files themselves, and the link to the list of commits, which
-# is pointed at what was actually built.
+# Replaces the files attached to a release with ones built from the branch. Started by hand only:
+# the version, tag and description stay; only the files and the link to the commits change.
 
 on:
   workflow_dispatch:
@@ -43,9 +41,8 @@ jobs:
 
           Write-Host "Rebuilding the installer of $tag from $($env:GITHUB_SHA)"
 
-          # The installer carries a version of its own, and it has to be the one on the release
-          # page rather than whatever the branch has moved on to. Two numbers, as everywhere in
-          # this project; a third is tolerated.
+          # The installer's own version must be the one on the release page, not the branch's.
+          # Two numbers, as everywhere in this project; a third is tolerated.
           $version = $tag -replace '^v', ''
           if ($version -notmatch '^\d+\.\d+(\.\d+)?$') { throw "The tag $tag is not a version." }
 
@@ -54,9 +51,8 @@ jobs:
 
       - name: Build
         shell: pwsh
-        # The same script a developer runs: the exe, then the installer around it. The version is
-        # the one of the release being rebuilt rather than of the branch: the tag stays as it is,
-        # and an installer announcing another number would contradict the page it hangs on.
+        # The same script a developer runs, with the version of the release being rebuilt rather
+        # than the branch's: an installer announcing another number would contradict its page.
         run: ./build.ps1 -Installer -Version ${{ steps.target.outputs.version }}
 
       - name: Replace the files
@@ -75,10 +71,8 @@ jobs:
           $tag = '${{ steps.target.outputs.tag }}'
           $sha = '${{ github.sha }}'
 
-          # Only the one line with the link is touched. Everything the release says about the
-          # version itself was written by hand and is left alone.
-          # gh hands the description back line by line, so it is joined and split once more:
-          # the lines then carry no stray carriage returns.
+          # Only the line with the link is touched; the hand-written description is left alone.
+          # gh hands the body back line by line, so it is joined and split once more (no stray CRs).
           $body = (gh release view $tag --json body --jq '.body') -join "`n"
           $lines = $body -split "`r?`n"
           $changed = $false

@@ -2,9 +2,8 @@
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="0.5.0.0" name="Remote-Gamehub" />
 
-  <!-- The application always runs elevated. Capture, the encoder session and the input
-       injection all fail without it, so asking once here is cheaper than relaunching. App
-       still checks at run time: a manifest is a request, not a guarantee. -->
+  <!-- Always elevated: capture, the encoder session and input injection all fail without it. The
+       app still checks at run time, since a manifest is a request, not a guarantee. -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">

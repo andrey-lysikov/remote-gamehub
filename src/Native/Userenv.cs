@@ -5,9 +5,8 @@ using System.Runtime.InteropServices;
 
 namespace RemoteGameHub.Native;
 
-// The environment and the folders of a person other than the one this process runs as. Needed
-// only while the server is LocalSystem: a game started under the player's token must see the
-// player's variables, and the configuration belongs in the player's profile, not in SYSTEM's.
+// The environment and folders of a person other than the one this process runs as: needed while
+// the server is LocalSystem, for games and for the configuration in the player's profile.
 internal static class Userenv
 {
     [DllImport("userenv.dll", SetLastError = true)]

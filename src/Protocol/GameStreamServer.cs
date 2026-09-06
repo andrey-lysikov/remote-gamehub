@@ -141,7 +141,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
                 // Which client this is, when it can be known. Over TLS the certificate says so;
                 // over plain HTTP the identifier a client sends is a constant compiled into it.
                 var certificate = secure ? (stream as SslStream)?.RemoteCertificate : null;
-                var presented = certificate is null ? null : new X509Certificate2(certificate);
+                using var presented = certificate is null ? null : new X509Certificate2(certificate);
                 var known = presented is null ? null : _clients.Find(presented);
 
                 // A client arriving over TLS with a certificate this server has not seen is
@@ -570,9 +570,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
         // it. 5.1 and 7.1 both move the sound; anything else stays on two.
         var audioChannels = channels == 6 ? 6 : channels == 8 ? 8 : 2;
 
-        // The same size, rate and range the RTSP ANNOUNCE repeats a moment later — read here so
-        // the screen can be moved before the game reads it, not after. Left at zero/false, which
-        // skips that early move, when an older client sends neither.
+        // The same size, rate and range the RTSP ANNOUNCE repeats later, read here so the screen
+        // moves before the game reads it. Zero/false, skipping that move, for an older client.
         var (width, height, fps) = ParseMode(request.Query("mode"));
         var hdrRequested = request.Query("hdrMode") == "1";
 

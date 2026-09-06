@@ -69,9 +69,8 @@ internal struct ProcessInformation
     internal uint ThreadId;
 }
 
-// TOKEN_PRIVILEGES with exactly one privilege in it, which is all this server ever adjusts at once.
-// The LUID it carries is the one declared in Dxgi.cs: the same two thirty-two-bit halves Windows
-// uses for an adapter's identifier and for a privilege's, and there is no second shape of it.
+// TOKEN_PRIVILEGES with exactly one privilege, all this server adjusts at once. The LUID is the one
+// declared in Dxgi.cs: the same two halves Windows uses for adapters and privileges alike.
 [StructLayout(LayoutKind.Sequential)]
 internal struct TokenPrivileges
 {
@@ -80,9 +79,8 @@ internal struct TokenPrivileges
     internal uint Attributes;
 }
 
-// Access tokens and the service control manager. Both are needed for one thing only: running
-// the server as LocalSystem inside the interactive session, which is what lets it capture the
-// secure desktop — the UAC prompt and the lock screen — and type into it.
+// Access tokens and the service control manager, needed for one thing: running the server as
+// LocalSystem inside the interactive session, so it can capture and type into the secure desktop.
 internal static class Advapi32
 {
     internal const uint TOKEN_ALL_ACCESS = 0x000F01FF;
@@ -198,9 +196,8 @@ internal static class Advapi32
     internal const uint SERVICE_CONTROL_STOP = 1;
     internal const uint SERVICE_CONTROL_INTERROGATE = 4;
     internal const uint SERVICE_CONTROL_SHUTDOWN = 5;
-    // Every reason it carries — a console connecting or disconnecting, a sign-in, a sign-out, a
-    // lock, an unlock — is treated the same, so none of them is named here: each can change which
-    // session the console is, and the supervisor asks Windows rather than working it out.
+    // Every reason (connect, disconnect, sign-in, sign-out, lock, unlock) is treated the same and
+    // none is named here: the supervisor asks Windows which session matters instead.
     internal const uint SERVICE_CONTROL_SESSIONCHANGE = 0x0000000E;
 
     internal const uint NO_ERROR = 0;

@@ -1,9 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- The same TFM, platform and WinForms as the server: without them the reference will not
-         resolve — the assembly pulls in WinForms for its tray icon even though nothing under test
-         ever draws one. -->
+    <!-- The same TFM, platform and WinForms as the server, or the reference will not resolve: the
+         assembly pulls in WinForms for its tray icon even though nothing under test draws one. -->
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <Platforms>x64</Platforms>
@@ -16,9 +15,8 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>RemoteGameHub.Tests</RootNamespace>
 
-    <!-- Internal classes are tested — the parsers, the pairing exchange, the library — through
-         InternalsVisibleTo in the server's csproj: making them public just for the tests would
-         mean shaping the server around the way it is verified. -->
+    <!-- Internal classes are tested through InternalsVisibleTo in the server's csproj: making
+         them public just for the tests would shape the server around its verification. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 

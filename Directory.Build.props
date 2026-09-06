@@ -1,0 +1,9 @@
+<Project>
+
+  <!-- Building the Windows-only projects on macOS or Linux: the SDK refuses a net10.0-windows
+       target there unless told to fetch the Windows targeting pack instead. No effect on Windows. -->
+  <PropertyGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+</Project>

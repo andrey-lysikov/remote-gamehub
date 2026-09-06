@@ -1,0 +1,12 @@
+{
+  "dotnet.defaultSolution": "RemoteGameHub.sln",
+  "files.exclude": {
+    "**/bin": true,
+    "**/obj": true
+  },
+  "files.eol": "\n",
+  "files.trimTrailingWhitespace": true,
+  "[csharp]": {
+    "editor.rulers": [100]
+  }
+}

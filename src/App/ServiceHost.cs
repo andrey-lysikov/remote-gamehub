@@ -7,10 +7,8 @@ using RemoteGameHub.Native;
 
 namespace RemoteGameHub.App;
 
-// The LocalSystem half. It draws nothing, streams nothing and holds no ports: its whole job is to
-// keep one copy of the server running as SYSTEM on the console session, and to move it when the
-// console does. Running the server as SYSTEM is what lets it capture and type into the secure
-// desktop — the UAC prompt and the lock screen — which an ordinary elevated copy cannot touch.
+// The LocalSystem half: draws nothing, streams nothing, holds no ports. It keeps one copy of the
+// server running as SYSTEM where the person is, which is what lets it capture the secure desktop.
 internal static class ServiceHost
 {
     // Held in static fields so the garbage collector does not move or collect the delegates while
@@ -40,9 +38,8 @@ internal static class ServiceHost
     // The server as SYSTEM on the console. Zero while nobody is signed in to start it for.
     private static nint _worker;
 
-    // How long the worker is given to close itself down before it is ended. Long enough for the
-    // listeners and the stream to be let go of, short enough that Windows shutting down does not
-    // wait on this service. WAIT_OBJECT_0 is zero, which is what a worker that left answers with.
+    // How long the worker may take to close itself before it is ended: enough for the listeners
+    // and the stream, short enough not to hold up a shutdown. WAIT_OBJECT_0 (zero) means it left.
     private const uint GracefulExitMs = 4000;
 
     // Enters the service control dispatcher and does not return until the service is stopped. The
@@ -122,26 +119,21 @@ internal static class ServiceHost
         }
     }
 
-    // Keeps exactly one worker alive on the console session for as long as somebody is signed in,
-    // and moves it when the console session changes. A poll rather than a wait on handles: the set
-    // of things to watch — the worker, the stop request, the session — is small and changes slowly.
+    // Keeps one worker alive in the session somebody is looking at, moving it only when the person
+    // is elsewhere. Not by console number: remote desktop hands the console to an empty sign-in screen.
     private static void Supervise()
     {
-        var currentSession = Wtsapi32.NoSession;
+        // The session the worker was started in; NoSession while there is no worker.
+        var workerSession = Wtsapi32.NoSession;
 
-        // When the worker was last started, and how long to wait before starting it again. A
-        // worker that refuses to run — no screen, no encoder, a configuration it will not read —
-        // exits in under a second, and starting it once a second would fill the log and the
-        // process table with the same refusal. Each quick exit doubles the wait, up to a minute.
+        // When the worker was last started and how long to wait before the next start: a worker
+        // that refuses to run exits in under a second, so each quick exit doubles the wait.
         var startedAt = DateTime.MinValue;
         var backoff = TimeSpan.Zero;
         var maximumBackoff = TimeSpan.FromMinutes(1);
 
-        // Quick exits in a row. A worker that refuses to run refuses for a reason that will not
-        // change by being asked again — no screen to capture, no encoder, a configuration file
-        // with a mistake in it — and it says so in a balloon every time. After this many the
-        // service stops itself rather than showing that balloon for ever; the worker's own log
-        // has the reason, and starting the application again is what tries once more.
+        // Quick exits in a row. A refusal will not change by being asked again, so after this many
+        // the service stops itself; the worker's log has the reason and a new start tries again.
         const int GiveUpAfter = 5;
         var failures = 0;
 
@@ -153,24 +145,39 @@ internal static class ServiceHost
         while (!Stopping.WaitOne(0))
         {
             var console = Wtsapi32.WTSGetActiveConsoleSessionId();
+            var target = ChooseSession(console, out var why);
 
-            // A different session really is a different desktop, and the worker on the old one can
-            // capture nothing. Fast user switching and a remote desktop connection both land here.
-            if (console != currentSession)
+            if (_worker != 0 && IsAlive(_worker))
             {
-                if (_worker != 0)
+                if (target != Wtsapi32.NoSession && target != workerSession)
                 {
-                    Log.Event($"the console session changed from {currentSession} to {console}; " +
-                              "the worker is being moved to it");
+                    // The person really is elsewhere now: another account took the console, or the
+                    // console came back while the worker sat in a session they left.
+                    Log.Event($"somebody is signed in and looking at session {target} (the " +
+                              $"console is session {console}); the worker in session " +
+                              $"{workerSession} is being moved there");
                     StopWorker();
+                    workerSession = Wtsapi32.NoSession;
+
+                    // Whatever went wrong in the old session says nothing about this one.
+                    failures = 0;
+                    backoff = TimeSpan.Zero;
+                    startedAt = DateTime.MinValue;
                 }
-
-                currentSession = console;
-
-                // Whatever went wrong in the old session says nothing about this one.
-                failures = 0;
-                backoff = TimeSpan.Zero;
-                startedAt = DateTime.MinValue;
+                else if (target == Wtsapi32.NoSession)
+                {
+                    // Nobody is looking at anything (remote desktop closed, or the sign-in screen).
+                    // The worker stays for the person's return, unless they signed out of it.
+                    var state = Wtsapi32.StateOf(workerSession);
+                    if (state is null || !SignedInQuietly(workerSession))
+                    {
+                        Log.Event($"session {workerSession}, where the worker runs, is " +
+                                  $"{Wtsapi32.DescribeState(state)} and nobody is signed in to " +
+                                  "it any more; the worker is being stopped");
+                        StopWorker();
+                        workerSession = Wtsapi32.NoSession;
+                    }
+                }
             }
 
             if (_worker != 0 && !IsAlive(_worker))
@@ -187,6 +194,7 @@ internal static class ServiceHost
 
                 Kernel32.CloseHandle(_worker);
                 _worker = 0;
+                workerSession = Wtsapi32.NoSession;
 
                 if (failures >= GiveUpAfter)
                 {
@@ -207,31 +215,22 @@ internal static class ServiceHost
                          ". Its own log says why it stopped.");
             }
 
-            // Whether there is anybody to stream for. Said only when the answer changes: this
-            // runs once a second, and a machine sitting at its sign-in screen would otherwise
-            // write a line a second all night.
-            // Written out rather than short-circuited, so that the reason is always set: the two
-            // ways of having nothing to start the server for read very differently in a log.
-            var ready = false;
-            string why;
+            // Whether there is anybody to stream for, said only when the answer changes and never
+            // while a worker runs: "nothing to start for" would read as though there were no server.
+            var ready = target != Wtsapi32.NoSession;
 
-            if (console == Wtsapi32.NoSession)
-            {
-                why = "no session is attached to the console";
-            }
-            else
-            {
-                ready = SomeoneSignedIn(console, out why);
-            }
-
-            if (ready != wasReady || (!ready && why != lastWhy))
+            if (_worker == 0 && (ready != wasReady || (!ready && why != lastWhy)))
             {
                 wasReady = ready;
                 lastWhy = why;
 
                 Log.Event(ready
-                    ? $"session {console} is the console and somebody is signed in to it; " +
-                      "the server belongs there"
+                    ? (target == console
+                          ? $"session {target} is the console and somebody is signed in to it; " +
+                            "the server belongs there"
+                          : $"session {target} is a remote desktop session somebody is signed in " +
+                            $"to, and the console (session {console}) has nobody; the server " +
+                            "belongs with the person")
                     : $"nothing to start the server for: {why}. The service waits, and starts it " +
                       "as soon as that changes.");
             }
@@ -239,7 +238,8 @@ internal static class ServiceHost
             if (_worker == 0 && ready && DateTime.UtcNow - startedAt >= backoff)
             {
                 startedAt = DateTime.UtcNow;
-                _worker = SessionLauncher.StartServerAsSystem(console, "--worker");
+                _worker = SessionLauncher.StartServerAsSystem(target, "--worker");
+                workerSession = _worker == 0 ? Wtsapi32.NoSession : target;
 
                 if (_worker == 0)
                 {
@@ -264,13 +264,46 @@ internal static class ServiceHost
                 }
             }
 
-            // A turn a second, and sooner when Windows says a session moved. Most of what raises
-            // that changes nothing here — locking the screen, unlocking it, answering a prompt all
-            // leave the console where it was — which is why the answer above is read again rather
-            // than acted on: restarting the worker for those would break a stream at exactly the
-            // moments this service exists to carry it through.
+            // A turn a second, sooner when a session moves. Most moves (lock, unlock, a prompt)
+            // change nothing, so the answer is re-read rather than acted on — no needless restarts.
             WaitHandle.WaitAny(Wakes, 1000);
         }
+    }
+
+    // The session the server belongs in now, or NoSession with the reason: the console when
+    // somebody is signed in to it, else an active remote desktop session. Never 0 or a left one.
+    private static uint ChooseSession(uint console, out string why)
+    {
+        if (console == Wtsapi32.NoSession)
+        {
+            why = "no session is attached to the console";
+        }
+        else if (SomeoneSignedIn(console, out why))
+        {
+            return console;
+        }
+
+        foreach (var (id, state) in Wtsapi32.Sessions())
+        {
+            if (id == 0 || id == console || state != Wtsapi32.WTSActive) continue;
+            if (!SignedInQuietly(id)) continue;
+
+            why = string.Empty;
+            return id;
+        }
+
+        why += ", and nobody is signed in over remote desktop";
+        return Wtsapi32.NoSession;
+    }
+
+    // Whether somebody is signed in to the session, with no comment when it cannot be asked: this
+    // is put to every session once a second, and the console's own check does say so.
+    private static bool SignedInQuietly(uint session)
+    {
+        if (!Wtsapi32.WTSQueryUserToken(session, out var token)) return false;
+
+        Kernel32.CloseHandle(token);
+        return true;
     }
 
     // ERROR_NO_TOKEN. What Windows answers about a session nobody has signed in to, which is the
@@ -295,10 +328,8 @@ internal static class ServiceHost
             return false;
         }
 
-        // Anything else is a fault on this side rather than an empty session — the privilege this
-        // call needs not switched on, most likely — and it says nothing about whether there is
-        // somebody there. Answering "no" to it would leave the server unstarted for ever over a
-        // question that was never really asked, so the launch goes ahead and reports for itself.
+        // Anything else is a fault on this side (the privilege not switched on, most likely) and
+        // says nothing about the session, so the launch goes ahead and reports for itself.
         Log.Warn($"whether anybody is signed in to session {session} could not be established: " +
                  $"{new Win32Exception(error).Message} (Win32 {error}). " +
                  "The server is started anyway.");
@@ -313,13 +344,14 @@ internal static class ServiceHost
     {
         if (_worker == 0) return;
 
-        // Given a moment to leave on its own first. Quit in its tray menu is the ordinary way this
-        // service is stopped at all: the worker shuts its listeners and its session down, asks the
-        // service to stop, and is already on its way out by the time this runs. Windows shutting
-        // down reaches here the same way. Only a worker that is still there afterwards is ended,
-        // which is the case this cannot be polite about: it has no window to close.
+        // A moment to leave on its own first: Quit and a shutdown both reach here with the worker
+        // already on its way out. Only one still there afterwards is ended; it has no window.
         if (Kernel32.WaitForMultipleObjects(1, new[] { _worker }, true, GracefulExitMs) != 0)
         {
+            // Said here because the worker cannot say it: ended from outside, its own log stops
+            // at whatever it wrote last, which reads as a crash to anybody who finds it.
+            Log.Event("the worker had not left on its own after " +
+                      $"{GracefulExitMs / 1000} s and is being ended by the service");
             Kernel32.TerminateProcess(_worker, 0);
             Kernel32.WaitForMultipleObjects(1, new[] { _worker }, true, 5000);
         }

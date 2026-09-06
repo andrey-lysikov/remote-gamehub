@@ -57,15 +57,13 @@ internal static class ConfFormat
         writer.Note("If you don't have a real HID device, we can emulate one.");
         writer.Key("VirtualMouse", config.VirtualMouse);
         writer.Blank();
-        writer.Note("Prefer a virtual display driver over a real screen, when one is found. This\n" +
-                    "server never installs one itself — the installer's own checkbox does, if you\n" +
-                    "asked it to.");
+        writer.Note("Prefer a virtual display driver over a real screen, when one is found. This server\n" +
+                    "never installs one itself; the installer's own checkbox does, if you asked it to.");
         writer.Key("VirtualDisplay", config.VirtualDisplay);
 
         writer.Section("Display");
-        writer.Note("Which screen to stream: \"auto\" for the one attached to the desktop, a\n" +
-                    "screen's own number (shown in the log at startup) or a piece of its name for\n" +
-                    "another.");
+        writer.Note("Which screen to stream: \"auto\" for the one attached to the desktop, a screen's own\n" +
+                    "number (shown in the log at startup) or a piece of its name for another.");
         writer.Key("Output", config.Output);
         writer.Blank();
         writer.Note("Which card encodes use \"auto\" follows whichever card the screen above is on.");
@@ -99,8 +97,7 @@ internal static class ConfFormat
         writer.Key("Ea", config.Ea);
         writer.Key("BattleNet", config.BattleNet);
         writer.Blank();
-        writer.Note("Folders of your own to look in, separated by commas. A folder whose name contains\n" +
-                    "a comma is wrapped in quotes or in brackets, whichever comes to hand:\n" +
+        writer.Note("Folders of your own, separated by commas; a name with a comma goes in quotes or brackets:\n" +
                     "    Folders = D:\\Games, \"E:\\Discs, old\", [F:\\Emulators (2004)]");
         writer.Key("Folders", config.GamesFolders);
         writer.Blank();

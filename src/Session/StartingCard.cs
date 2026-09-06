@@ -6,7 +6,6 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
-using Microsoft.Win32;
 using RemoteGameHub.App;
 using RemoteGameHub.Native;
 
@@ -27,7 +26,7 @@ internal sealed unsafe class StartingCard : IDisposable
     private readonly int _height;
     private readonly uint _format;
     private readonly string _title;
-    private readonly string? _posterPath;
+    private readonly Image? _poster;
 
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private TimeSpan _lastRedraw = TimeSpan.MinValue;
@@ -36,7 +35,7 @@ internal sealed unsafe class StartingCard : IDisposable
     internal nint Texture => (nint)_texture;
 
     private StartingCard(void* texture, void* staging, void* context, int width, int height,
-                         uint format, string title, string? posterPath)
+                         uint format, string title, Image? poster)
     {
         _texture = texture;
         _staging = staging;
@@ -45,7 +44,7 @@ internal sealed unsafe class StartingCard : IDisposable
         _height = height;
         _format = format;
         _title = title;
-        _posterPath = posterPath;
+        _poster = poster;
     }
 
     // Draws the card and puts it on the graphics card. Returns null rather than throwing: a
@@ -64,10 +63,11 @@ internal sealed unsafe class StartingCard : IDisposable
 
         void* texture = null;
         void* staging = null;
+        var poster = LoadPoster(posterPath);
 
         try
         {
-            using var picture = Draw(width, height, title, posterPath, 0);
+            using var picture = Draw(width, height, title, poster, 0);
 
             var description = new D3D11Texture2DDesc
             {
@@ -99,9 +99,10 @@ internal sealed unsafe class StartingCard : IDisposable
                      (posterPath is null ? " (no picture for it yet)" : string.Empty));
 
             var card = new StartingCard(texture, staging, (void*)context, width, height, format,
-                title, posterPath);
+                title, poster);
             texture = null;
             staging = null;
+            poster = null;
             return card;
         }
         catch (Exception error)
@@ -109,6 +110,28 @@ internal sealed unsafe class StartingCard : IDisposable
             Log.Info($"the starting card could not be made: {error.Message}");
             Com.ReleaseAndClear(ref staging);
             Com.ReleaseAndClear(ref texture);
+            return null;
+        }
+        finally
+        {
+            // Still set only when the card was never built.
+            poster?.Dispose();
+        }
+    }
+
+    // The game's picture, decoded once for the life of the card: it is drawn again fifteen times
+    // a second for the spinner, and opening the file each time was a decode per redraw.
+    private static Image? LoadPoster(string? posterPath)
+    {
+        if (posterPath is null || !File.Exists(posterPath)) return null;
+
+        try
+        {
+            return Image.FromFile(posterPath);
+        }
+        catch (Exception)
+        {
+            // A picture that will not open is a picture that is not shown; the tile takes its place.
             return null;
         }
     }
@@ -123,7 +146,7 @@ internal sealed unsafe class StartingCard : IDisposable
 
         try
         {
-            using var picture = Draw(_width, _height, _title, _posterPath,
+            using var picture = Draw(_width, _height, _title, _poster,
                 (float)(now.TotalMilliseconds % 1500 / 1500 * 360));
             Upload(_context, _staging, _texture, picture, _width, _height, _format);
         }
@@ -135,7 +158,7 @@ internal sealed unsafe class StartingCard : IDisposable
 
     // ------------------------------------------------------------------ the drawing
 
-    private static Bitmap Draw(int width, int height, string title, string? posterPath,
+    private static Bitmap Draw(int width, int height, string title, Image? poster,
                                float spinnerAngle)
     {
         var dark = ThemeIcons.AppsAreDark();
@@ -160,7 +183,7 @@ internal sealed unsafe class StartingCard : IDisposable
             var posterLeft = (width - posterWidth) / 2;
             var area = new Rectangle(posterLeft, posterTop, posterWidth, posterHeight);
 
-            DrawPoster(canvas, area, posterPath, accent, foreground, title);
+            DrawPoster(canvas, area, poster, accent, foreground, title);
 
             using var font = CaptionFont(height);
             using var brush = new SolidBrush(foreground);
@@ -205,15 +228,13 @@ internal sealed unsafe class StartingCard : IDisposable
 
     // The game's own picture when there is one, and a lettered tile when there is not — which
     // is better than a hole, and is what the client would draw in its own list anyway.
-    private static void DrawPoster(Graphics canvas, Rectangle area, string? posterPath,
+    private static void DrawPoster(Graphics canvas, Rectangle area, Image? poster,
                                    Color accent, Color foreground, string title)
     {
-        if (posterPath is not null && File.Exists(posterPath))
+        if (poster is not null)
         {
             try
             {
-                using var poster = Image.FromFile(posterPath);
-
                 // Fitted inside the space rather than stretched to it: a store's wide header
                 // picture and its tall portrait are both used, and neither should be distorted.
                 var scale = Math.Min((float)area.Width / poster.Width,
@@ -228,7 +249,7 @@ internal sealed unsafe class StartingCard : IDisposable
             }
             catch (Exception)
             {
-                // A picture that will not open is a picture that is not shown. The tile below
+                // A picture that will not draw is a picture that is not shown. The tile below
                 // takes its place.
             }
         }
@@ -268,8 +289,10 @@ internal sealed unsafe class StartingCard : IDisposable
     {
         try
         {
-            var value = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\DWM",
-                "ColorizationColor", null);
+            // The signed-in person's, not this process's: as the service's worker this process
+            // is SYSTEM, whose own registry has never been personalised.
+            var value = UserContext.ReadUserSetting(@"Software\Microsoft\Windows\DWM",
+                                                    "ColorizationColor");
 
             if (value is int packed)
             {
@@ -367,6 +390,7 @@ internal sealed unsafe class StartingCard : IDisposable
 
     public void Dispose()
     {
+        _poster?.Dispose();
         Com.ReleaseAndClear(ref _staging);
         Com.ReleaseAndClear(ref _texture);
     }

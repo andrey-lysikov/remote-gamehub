@@ -27,20 +27,15 @@ internal static class Program
         Log.Start(ServiceControl.LogDirectory, ServiceControl.LogFallbackDirectory, Version,
                   AppParameters.Identity.ServiceLogFile);
 
-    // Whether this process is the copy the service started — the one that actually streams.
-    // Decided by the argument the service passes and by nothing else. Asking Windows who this
-    // process is instead would be a guess about how it was started, and the wrong guess is a
-    // loop: a worker that mistook itself for a launcher would find the service already running,
-    // decide it had nothing to do, exit, and be started again a second later until the service
-    // gave up. Read once in Main and kept, because the exit path needs it too.
+    // Whether this is the copy the service started, decided by its argument alone: a worker that
+    // guessed wrong would exit for the running service and be restarted for ever. Kept for exit.
     private static bool _isWorker;
 
     [STAThread]
     private static int Main(string[] args)
     {
-        // The service half, which streams nothing and holds no ports: it keeps one copy of the
-        // server running as SYSTEM on the console session. Decided before anything is opened,
-        // because it logs somewhere else and reads no configuration at all.
+        // The service half, which streams nothing and holds no ports. Decided before anything is
+        // opened, because it logs somewhere else and reads no configuration at all.
         if (Asked(args, "--service"))
         {
             StartServiceLog();
@@ -58,10 +53,8 @@ internal static class Program
 
         _isWorker = Asked(args, "--worker");
 
-        // Started by the service, this process is LocalSystem — the identity that can capture and
-        // type into the secure desktop, which is the whole point. It is nobody's profile, though,
-        // so the configuration and the log are put in the profile of whoever is signed in to the
-        // console: the same file the person edits and the same one an ordinary run would use.
+        // Started by the service this process is LocalSystem, which is nobody's profile, so the
+        // configuration and the log go into the signed-in person's: the same files as an ordinary run.
         if (PlatformGuard.IsSystem)
         {
             AppConfig.ProfileDirectoryOverride = UserContext.ConsoleUserLocalAppData();
@@ -146,22 +139,14 @@ internal static class Program
                 return 0;
             }
 
-            // The service, which is what actually runs the server. This copy was started by a
-            // person — from the shortcut, the installer or the sign-in task — and it already has
-            // the administrator rights that making a service needs, so it makes one, starts it,
-            // and steps aside: the worker the service starts is LocalSystem, and that is the only
-            // identity Windows lets capture and answer a prompt for administrator rights.
-            //
-            // Not reached by the worker, which was started by the service and says so on its
-            // command line, and not by the capture self-test, which has to run its capture in
-            // this process to be worth anything.
+            // This copy already has administrator rights, so it makes the service, starts it and
+            // steps aside; the worker (LocalSystem) streams. Not for the worker or the capture test.
             if (!_isWorker && !Asked(args, "--capture-test"))
             {
                 if (ServiceControl.EnsureRunning(out var refusal))
                 {
-                    // Waited for rather than assumed. Everything from here on happens in another
-                    // process, under another account, writing to another log; if it never starts,
-                    // this line is the last one anybody sees and it would be a lie.
+                    // Waited for rather than assumed: everything from here on is another process
+                    // under another account, and if it never starts this line would be a lie.
                     if (ServiceControl.WaitForServer(TimeSpan.FromSeconds(20)))
                     {
                         Log.Event(
@@ -180,15 +165,13 @@ internal static class Program
                         "This copy is running the server itself instead, so the machine is not " +
                         "left with nothing.");
 
-                    // Better a server without the secure desktop than no server at all. The
-                    // service is stopped first: left running it would start a second copy the
-                    // moment it managed to, and the two would fight over the ports.
+                    // Better a server without the secure desktop than none. The service is stopped
+                    // first, or it would start a second copy and the two would fight over the ports.
                     ServiceControl.StopIfRunning(wait: true);
                 }
 
-                // Not fatal, and deliberately so: everything except the secure desktop works in
-                // this process exactly as it always did, and a machine where a service cannot be
-                // made — a policy, a locked-down account — should still stream.
+                // Not fatal, deliberately: everything but the secure desktop works in this process,
+                // and a machine where a service cannot be made should still stream.
                 Log.Warn(
                     $"The service could not be used: {refusal}.\n" +
                     "This copy runs the server itself instead. Everything works except one thing:\n" +
@@ -197,14 +180,8 @@ internal static class Program
                     "answers it at the machine itself.");
             }
 
-            // Held before anything is opened. Two copies cannot hold the same ports, and the
-            // second one would fail at a listener rather than here, where the reason is plain.
-            //
-            // The refusal is caught as well as the ordinary answer: the service's worker runs as
-            // LocalSystem and the mutex it creates carries SYSTEM's own security, which an
-            // ordinary elevated copy started afterwards is not allowed to open. That refusal
-            // means exactly what a taken mutex means — somebody else has it — and it used to
-            // arrive here as an unhandled exception and a crash at startup.
+            // Held before anything is opened, so a second copy fails here with a plain reason. The
+            // refusal is caught too: SYSTEM's worker owns a mutex an elevated copy may not open.
             Mutex? single = null;
             try
             {
@@ -237,9 +214,8 @@ internal static class Program
                     return 1;
                 }
 
-                // Settles the first question a black screen raises, without a client involved.
-                // After the checks above, because it needs the same screen and settings the
-                // stream would use.
+                // Settles the first question a black screen raises, without a client. After the
+                // checks above, because it needs the same screen and settings the stream would use.
                 if (args.Any(a => a.Equals("--capture-test", StringComparison.OrdinalIgnoreCase)))
                 {
                     return CaptureSelfTest.Run(preflight.Output!, preflight.Config!.CaptureCursor,
@@ -264,6 +240,22 @@ internal static class Program
         {
             Log.Info("there is nothing to open: the path was never set");
             return;
+        }
+
+        // As the person signed in, when this server is SYSTEM: a browser or editor started as
+        // SYSTEM is SYSTEM's own (Edge refuses outright). An ordinary run already is the person.
+        if (PlatformGuard.IsSystem)
+        {
+            if (SessionLauncher.StartAsConsoleUser(target, null)) return;
+
+            // An address is not tried as SYSTEM: a browser started as it opens nothing, and the
+            // silence hid the refusal above. A file still gets notepad below, which does run.
+            if (target.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Warn($"{target} was not opened: it could not be started as the signed-in " +
+                         "person (the reason is just above), and a browser does not run as SYSTEM");
+                return;
+            }
         }
 
         try
@@ -368,9 +360,8 @@ internal static class Program
         var games = new GameLibrary(database);
         try
         {
-            // As the person signed in, when this server is SYSTEM: Steam, Xbox and the rest keep
-            // where they are installed under HKEY_CURRENT_USER, and SYSTEM's own is empty. Runs
-            // unchanged, without impersonating anybody, on an ordinary elevated start.
+            // As the person signed in, when this server is SYSTEM: the launchers live under their
+            // HKEY_CURRENT_USER, and SYSTEM's own is empty. Unchanged on an ordinary elevated start.
             UserContext.AsConsoleUser(() => games.Rescan(config));
         }
         catch (Exception error)
@@ -452,10 +443,10 @@ internal static class Program
         // Said once per version, in a balloon that opens the download page when clicked.
         using var updates = new UpdateChecker();
         updates.Found += newer => tray.Notify(
-            $"{AppParameters.Identity.DisplayName} {newer} is available",
-            $"This is {Program.Version}. Click here to open the download page.",
+            $"{AppParameters.Identity.DisplayName} v{newer} is available",
+            $"This is v{Program.Version}. Click here to open the download page.",
             isError: false,
-            onClick: () => Open(AppParameters.Links.LatestRelease));
+            onClick: () => Open(updates.Link));
         updates.Start();
 
         // The page: what this server is doing, and the box for the four digits a pairing client
@@ -557,10 +548,8 @@ internal static class Program
             new TrayEntry("Refresh games", () => Task.Run(() => RescanGames("asked for from the menu"))),
             new TrayEntry("Show status page", () => Open($"http://localhost" +
                 (config.WebPort == 80 ? string.Empty : $":{config.WebPort}") + "/")),
-            // Off the message loop's thread for the same reason as the scan: it runs a process
-            // and waits for it, and the notification area must not wait with it.
-            // Still the sign-in task, service or no service: the task starts the executable, and
-            // the executable is what starts the service. Nothing about it changed.
+            // Off the message loop's thread, since it runs a process and waits for it. Still the
+            // sign-in task, service or no service: the task starts the exe, which starts the service.
             new TrayEntry("Autostart", () => Task.Run(autostart.Toggle),
                           () => autostart.IsEnabled && autostart.StartsThisCopy),
             TrayEntry.Separator,
@@ -598,10 +587,8 @@ internal static class Program
         forwarding.DisposeAsync().AsTask().GetAwaiter().GetResult();
         console.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
-        // Last of all, and only for the copy the service started: everything above is already shut
-        // down, so the service is free to end this process the moment it is told to stop. Without
-        // this the service would notice its worker gone and start another one a second later,
-        // which is the opposite of what somebody choosing Quit asked for.
+        // Last of all, and only for the worker: everything is shut down, so the service may end this
+        // process at once. Otherwise it would see its worker gone and start another, unlike Quit.
         if (_isWorker) ServiceControl.StopIfRunning();
 
         return 0;

@@ -240,9 +240,23 @@ internal sealed class GameWatcher : IDisposable
     {
         if (HasStarted || _installPath is null || _sweptEnough) return false;
 
+        Process[] processes;
         try
         {
-            foreach (var process in Process.GetProcesses())
+            processes = Process.GetProcesses();
+        }
+        catch (Exception)
+        {
+            // Enumerating processes can fail while the machine is busy starting one.
+            return false;
+        }
+
+        // Every handle but the one kept is disposed, the ones after a match included: a return
+        // out of the loop used to leave the rest of the table to the finaliser.
+        var found = false;
+        foreach (var process in processes)
+        {
+            if (!found)
             {
                 try
                 {
@@ -251,7 +265,8 @@ internal sealed class GameWatcher : IDisposable
                         path.StartsWith(_installPath, StringComparison.OrdinalIgnoreCase))
                     {
                         _game = process;
-                        return true;
+                        found = true;
+                        continue;
                     }
                 }
                 catch (Exception)
@@ -259,16 +274,12 @@ internal sealed class GameWatcher : IDisposable
                     // Plenty of processes will not say where they came from, even to an
                     // administrator. They are simply not the one being looked for.
                 }
-
-                process.Dispose();
             }
-        }
-        catch (Exception)
-        {
-            // Enumerating processes can fail while the machine is busy starting one.
+
+            process.Dispose();
         }
 
-        return false;
+        return found;
     }
 
     // Closes the game, because a client asked to: politely first, then by force — but only when

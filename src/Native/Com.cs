@@ -18,9 +18,6 @@ internal static unsafe class Com
             return ((delegate* unmanaged[Stdcall]<void*, Guid*, void**, int>)VTable(self)[0])(self, id, output);
     }
 
-    internal static uint AddRef(void* self) =>
-        ((delegate* unmanaged[Stdcall]<void*, uint>)VTable(self)[1])(self);
-
     internal static uint Release(void* self) =>
         self is null ? 0 : ((delegate* unmanaged[Stdcall]<void*, uint>)VTable(self)[2])(self);
 

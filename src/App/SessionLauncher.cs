@@ -8,10 +8,8 @@ using RemoteGameHub.Native;
 
 namespace RemoteGameHub.App;
 
-// Starting a process in the interactive console session with a chosen identity, which only a
-// LocalSystem process can do. Two callers: the service, which starts the server here as SYSTEM on
-// the console so it can capture and type into the secure desktop; and that server, which starts
-// games here as the person signed in, so a game finds its profile and does not run as SYSTEM.
+// Starting a process in the interactive session under a chosen identity, which only LocalSystem
+// can do: the server as SYSTEM for the service, and games as the signed-in person for the server.
 internal static class SessionLauncher
 {
     private static bool _privilegesEnabled;
@@ -92,31 +90,32 @@ internal static class SessionLauncher
         }
     }
 
-    // Starts a game as the person signed in to the console, through the shell so a steam:// URL or
-    // a shell: path resolves exactly as a double-click would. Only reached when the server itself
-    // runs as SYSTEM; otherwise the server starts games directly, as itself.
-    internal static bool StartGameAsConsoleUser(string command, string? workingDirectory)
+    // Starts something as the person signed in, through the shell so a URL, a .conf or a shell:
+    // path resolves as a double-click would. Only reached when the server itself runs as SYSTEM.
+    internal static bool StartAsConsoleUser(string command, string? workingDirectory)
     {
         EnablePrivileges();
 
-        var session = Wtsapi32.WTSGetActiveConsoleSessionId();
+        // This process's own session: the console is a sign-in screen with nobody on it while
+        // the person is connected over remote desktop, and asking it answered "no token" (1008).
+        var session = Wtsapi32.ServedSessionId();
         if (session == Wtsapi32.NoSession)
         {
-            Log.Warn("no console session is attached; the game cannot be started as the signed-in user");
+            Log.Warn("this process is in no session; nothing can be started as the signed-in user");
             return false;
         }
 
         if (!Wtsapi32.WTSQueryUserToken(session, out var userToken))
         {
-            Log.Warn($"the signed-in user's token could not be obtained: {LastError()}");
+            Log.Warn($"the token of the person signed in to session {session} could not be " +
+                     $"obtained: {LastError()}");
             return false;
         }
 
         try
         {
-            // Through cmd's start, which is ShellExecute: the same reason the direct path uses
-            // UseShellExecute, and the only way a URL or a shell: path runs at all. The empty
-            // first quotes are start's title argument, which it insists on when a path is quoted.
+            // Through cmd's start, which is ShellExecute: the only way a URL or a shell: path runs.
+            // The empty first quotes are start's title argument, insisted on when a path is quoted.
             var line = new StringBuilder($"cmd.exe /c start \"\" \"{command}\"");
             var process = StartWith(userToken, null, line, workingDirectory,
                                     Advapi32.CREATE_UNICODE_ENVIRONMENT | Advapi32.CREATE_NO_WINDOW,

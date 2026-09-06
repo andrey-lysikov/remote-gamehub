@@ -1,16 +1,5 @@
-<#
-    What the server needs and does not carry: the .NET Desktop Runtime it runs on, and — for the
-    client's gamepads — the ViGEmBus driver. Nothing of either is in the msi and nothing is
-    fetched when the msi is built: this runs on the machine that installs, looks at what is there,
-    asks the two authors what the newest is, and fetches only what is missing or behind.
-
-    The installer runs it once it has finished, from the temporary folder it was placed in — not
-    installed beside the exe — and it deletes itself when it is done. Run again by hand from a
-    copy taken out of the msi, if a driver was declined or the machine had no way to the internet
-    that day:
-
-        powershell -ExecutionPolicy Bypass -File Prerequisites.ps1 [-NoDriver]
-#>
+# Fetches what the msi does not carry — the .NET Desktop Runtime and the ViGEmBus driver — on the
+# installing machine, only what is missing or behind. Run by hand: Prerequisites.ps1 [-NoDriver]
 
 param(
     # The driver is the one part somebody may not want; the installer passes this when its
@@ -37,9 +26,8 @@ $viGEmApi  = 'https://api.github.com/repos/nefarius/ViGEmBus/releases/latest'
 $programFiles = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
 $dotNetShared = Join-Path $programFiles 'dotnet\shared\Microsoft.WindowsDesktop.App'
 
-# curl.exe, which Windows ships, rather than Invoke-WebRequest: it is present under any execution
-# policy and any PowerShell, and it reads sixty megabytes at the speed of the line. Silent, with
-# errors kept: its progress meter goes to the error stream and would be read as failure.
+# curl.exe, which Windows ships, rather than Invoke-WebRequest: present under any execution policy
+# and fast. Silent with errors kept: its progress meter goes to the error stream.
 function Read-Address($url) {
     $answer = & curl.exe -sIL -o NUL -w '%{url_effective}' $url
     if ($LASTEXITCODE -ne 0) { return $null }

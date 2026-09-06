@@ -396,7 +396,7 @@ internal sealed class PortForwarding : IAsyncDisposable
             using var content = new StringContent(envelope, Encoding.UTF8, "text/xml");
             content.Headers.Add("SOAPAction", $"\"{_serviceType}#{action}\"");
 
-            var answer = await http.PostAsync(_controlUrl, content, cancel);
+            using var answer = await http.PostAsync(_controlUrl, content, cancel);
             var text = await answer.Content.ReadAsStringAsync(cancel);
 
             if (answer.IsSuccessStatusCode) return new CallResult(true, 0, text);

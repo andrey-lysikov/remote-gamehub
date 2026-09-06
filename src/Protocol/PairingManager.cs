@@ -104,6 +104,7 @@ internal sealed class PairingManager
             waiting.Abandoned = true;
             waiting.Pin.TrySetCanceled();
             _sessions.Remove(waiting.UniqueId);
+            waiting.ClientCertificate.Dispose();
 
             Log.Info($"pairing with \"{waiting.DeviceName}\" was cancelled from the page");
             return true;
@@ -167,6 +168,7 @@ internal sealed class PairingManager
             if (_sessions.TryGetValue(uniqueId, out var previous))
             {
                 previous.Pin.TrySetCanceled();
+                previous.ClientCertificate.Dispose();
 
                 // How a wrong PIN is recognised at all: the client checks the answer to step three
                 // and, if the digits did not match, stops without telling this server anything.
@@ -222,7 +224,10 @@ internal sealed class PairingManager
             lock (_gate)
             {
                 if (_sessions.TryGetValue(uniqueId, out var current) && current == session)
+                {
                     _sessions.Remove(uniqueId);
+                    session.ClientCertificate.Dispose();
+                }
             }
 
             Log.Info($"\"{name}\" stopped waiting for its PIN before one was entered");
@@ -405,9 +410,14 @@ internal sealed class PairingManager
         lock (_gate) return _sessions.GetValueOrDefault(uniqueId);
     }
 
+    // The certificate goes with the session: it is a native handle, and a pairing that stalled
+    // half way used to keep it for the life of the process.
     private void Forget(string uniqueId)
     {
-        lock (_gate) _sessions.Remove(uniqueId);
+        lock (_gate)
+        {
+            if (_sessions.Remove(uniqueId, out var session)) session.ClientCertificate.Dispose();
+        }
     }
 
     // The signature bytes of a certificate — the last field of the X.509 structure. Both ends mix

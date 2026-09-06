@@ -23,25 +23,21 @@
     <Authors>Andrey.Lysikov and Claude</Authors>
     <Copyright>© Andrey Lysikov, Apache 2.0 licence.</Copyright>
     <Description>Desktop and game streaming to Moonlight clients, encoded on the graphics card.</Description>
-    <Version>1.2</Version>
+    <Version>1.3</Version>
   </PropertyGroup>
 
   <PropertyGroup>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- The one drawing: the executable, the shortcut, the installed-programs list and the tray
-         all use it. There were four more, one per notification-area theme; the coloured one is
-         drawn the same on every theme and the others were four files to keep in step for nothing. -->
+    <!-- The one drawing, used by the exe, the shortcut, the installed-programs list and the tray:
+         the coloured icon looks the same on every theme, so the four per-theme files went. -->
     <IconFile>$(MSBuildThisFileDirectory)..\pictures\RemoteGameHub.ico</IconFile>
     <ApplicationIcon>$(IconFile)</ApplicationIcon>
-    <!-- The minimum of Windows 11 (build 22000) is checked at run time, in PlatformGuard.cs.
-         It cannot be declared through SupportedOSPlatformVersion: that property needs a versioned
-         TFM (net10.0-windows10.0.22000.0), which drags in the Windows SDK projections and adds
-         tens of megabytes to the exe. -->
+    <!-- Windows 11 (build 22000) is checked at run time in PlatformGuard.cs: declaring it through
+         SupportedOSPlatformVersion needs a versioned TFM, which adds tens of megabytes of SDK. -->
   </PropertyGroup>
 
-  <!-- One exe, but without .NET inside: the machine needs .NET Desktop Runtime 10 or newer.
-       When it is missing, the window with the download link is shown by the apphost itself —
-       before the first line of C#, so this cannot be checked in code. -->
+  <!-- One exe without .NET inside: the machine needs .NET Desktop Runtime 10 or newer. When it
+       is missing the apphost itself shows the download link, before any C# runs. -->
   <PropertyGroup>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
@@ -55,52 +51,39 @@
     <!-- So that no .pdb appears next to the exe -->
     <DebugType>none</DebugType>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <!-- WFO0003: the WinForms analyser suggests setting DPI through ApplicationHighDpiMode instead
-         of the manifest. The manifest is right here: capture works in physical pixels, and the
-         awareness has to be in force before the first line of code runs. -->
+    <!-- WFO0003 suggests ApplicationHighDpiMode instead of the manifest. The manifest is right:
+         capture works in physical pixels, and awareness must be in force before any code runs. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The same icon again, this time inside the executable: the tray asks for it by name at run
-         time, and the Win32 resource above is not readable as a stream. Embedded rather than
-         shipped beside the exe, because one exe was promised and an icon that could be missing
-         would be missing exactly when someone first looks for the server. -->
+    <!-- The same icon inside the exe: the tray asks for it by name as a stream, which the Win32
+         resource above is not. Embedded rather than shipped beside, since one exe was promised. -->
     <EmbeddedResource Include="$(IconFile)"
                       LogicalName="RemoteGameHub.Icons.%(Filename)%(Extension)" />
 
 
     <!-- The picture a client shows beside "Desktop". Embedded rather than fetched or looked for on
-         disk: it is the one entry in the list that is always there, on every machine, and a cover
-         that depends on a file being present would be missing exactly when someone first looks. -->
+         disk: it is the one entry that is always there, so its cover must always be there too. -->
     <EmbeddedResource Include="$(MSBuildThisFileDirectory)..\pictures\desktop-cover.png"
                       LogicalName="RemoteGameHub.Art.desktop-cover.png" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- The parsers, the pairing exchange and the library are tested as they are, internal:
-         making them public just for the tests would mean shaping the server around the way it
-         is verified. -->
+         making them public just for the tests would shape the server around its verification. -->
     <InternalsVisibleTo Include="RemoteGameHub.Tests" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The store of clients that have paired, and whatever else later needs to outlive a run.
-         A file rather than a service, and SQLite rather than a format of this project's own: the
-         first question asked of any stored data is "what is actually in it", and that is answered
-         by any of a dozen tools for this one. The native library it carries is unpacked beside the
-         executable at first run, which is what IncludeNativeLibrariesForSelfExtract is for. -->
+    <!-- The store of paired clients and whatever else outlives a run: SQLite, readable by a dozen
+         tools. Its native library is unpacked beside the exe (IncludeNativeLibrariesForSelfExtract). -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.2" />
-    <!-- Pinned explicitly, above what Microsoft.Data.Sqlite 10.0.2 would pull in on its own: the
-         2.1.11 native library carries SQLite 3.49, which has a published memory-corruption defect
-         (GHSA-2m69-gcr7-jv3q / CVE-2025-6965, fixed in SQLite 3.50.2). 2.1.13 carries 3.53.3.
-         Remove this line only when Microsoft.Data.Sqlite itself references a fixed bundle. -->
+    <!-- Pinned above what Microsoft.Data.Sqlite 10.0.2 pulls in: 2.1.11 carries SQLite 3.49 with
+         CVE-2025-6965 (fixed in 3.50.2). Remove once Microsoft.Data.Sqlite references a fixed bundle. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
-    <!-- Opus, in pure C#, for the audio stream. Windows has no Opus encoder and neither does
-         .NET, and the negotiated audio (48 kHz, stereo or 5.1) is not something WASAPI or Media
-         Foundation can hand out in the shape Moonlight needs. Concentus is a managed port of the
-         reference encoder, so it adds no native dependency and does not break the single
-         executable — the one place a dependency was unavoidable, kept managed. -->
+    <!-- Opus in pure C# for the audio stream: neither Windows nor .NET has an Opus encoder, and a
+         managed port adds no native dependency, so the single executable stays whole. -->
     <PackageReference Include="Concentus" Version="2.2.2" />
   </ItemGroup>
 

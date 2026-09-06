@@ -180,6 +180,20 @@ internal sealed class EnetHost : IDisposable
 
     private void Loop()
     {
+        try
+        {
+            Receive();
+        }
+        finally
+        {
+            // Input is typed from this thread, which attached it to the input desktop; the handle
+            // that took is not closed by Windows when the thread goes.
+            Session.InputDesktop.Detach();
+        }
+    }
+
+    private void Receive()
+    {
         var buffer = new byte[MaximumMtu];
         var from = (EndPoint)new IPEndPoint(
             _socket!.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any, 0);

@@ -23,18 +23,15 @@ internal enum ReopenOutcome
 {
     // A new duplication is open. The frame texture is new too, so the encoder is rebuilt with it.
     Reopened,
-    // Windows will not duplicate this screen at the moment, and the reason passes on its own: a
-    // prompt on the secure desktop, the lock screen, a session being handed over. Waiting is the
-    // answer, and it must not count towards giving up — nothing is wrong with this server.
+    // Windows will not duplicate this screen for the moment (a secure desktop, a session hand-over)
+    // and the reason passes on its own: wait, and do not count it towards giving up.
     Unavailable,
     // Something else, which may or may not pass. Counted, and the stream ends if it goes on.
     Failed,
 }
 
-// The desktop is there but not this process's to duplicate right now. Separated from every other
-// refusal because the answer is different: wait, rather than rebuild or give up. Windows says this
-// while the secure desktop is in front — a UAC prompt, the sign-in or lock screen — to everything
-// that is not LocalSystem, and to LocalSystem too when its thread is on the wrong desktop.
+// The desktop is there but not this process's to duplicate now: Windows says this while the secure
+// desktop is in front, to everything but LocalSystem on the right desktop. The answer is to wait.
 internal sealed class DesktopUnavailableException : Exception
 {
     internal DesktopUnavailableException(string message) : base(message) { }
@@ -183,12 +180,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 
     private void OpenDuplication()
     {
-        // The one call that makes a UAC prompt streamable. A duplication belongs to the desktop the
-        // asking thread is on, and Windows composes the prompt on a desktop of its own (Winlogon).
-        // Moved there first, the duplication opens on it and the prompt is what gets captured;
-        // left on Default, DuplicateOutput answers DXGI_ERROR_ACCESS_DENIED until the prompt is
-        // gone. Only LocalSystem may open the secure desktop, which is why the service exists —
-        // for anyone else this call quietly does nothing and the refusal below is handled instead.
+        // What makes a UAC prompt streamable: a duplication belongs to the asking thread's desktop,
+        // so it moves to Winlogon first. Only LocalSystem may; for anyone else this does nothing.
         Session.InputDesktop.Attach(force: true);
 
         Com.Check(Dxgi.EnumOutputs(_adapter, (uint)_outputIndex, out var output),
@@ -308,10 +301,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 
     private void CreateFrameTexture()
     {
-        // Here rather than in Reopen: between a lost duplication and a new one the frame texture
-        // holds the last picture that was captured, and the stream goes on sending it. A prompt
-        // for administrator rights is exactly that gap, and a client sent nothing for the seven
-        // seconds it waits gives up and disconnects — which is not what the waiting is for.
+        // Here rather than in Reopen: between duplications the texture holds the last picture and
+        // the stream keeps sending it, or a client sent nothing for seven seconds would give up.
         ReleaseFrameTextures();
 
         var desc = new D3D11Texture2DDesc
@@ -434,9 +425,8 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
     {
         if (_disposed || _frame is null) return CaptureStatus.Lost;
 
-        // The duplication is gone but the texture it filled is not, which is how the stream goes
-        // on sending the last picture while Windows is holding the screen back. Answered as Lost
-        // so the caller asks for a new duplication, which is the only thing that can end this.
+        // The duplication is gone but its texture is not, which is how the last picture goes on
+        // being sent. Answered as Lost so the caller asks for a new one, the only way out.
         if (_duplication is null) return CaptureStatus.Lost;
 
         ReleaseHeldFrame();

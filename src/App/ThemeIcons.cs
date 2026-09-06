@@ -4,7 +4,6 @@
 using System.Drawing;
 using System.Reflection;
 using System.Windows.Forms;
-using Microsoft.Win32;
 
 namespace RemoteGameHub.App;
 
@@ -12,8 +11,10 @@ namespace RemoteGameHub.App;
 // drawings chosen by the notification area's colour; there is one now, in colour, on every theme.
 internal static class ThemeIcons
 {
+    // Under HKEY_CURRENT_USER — the signed-in person's, which is not this process's own when the
+    // process is the service's worker running as SYSTEM. See UserContext.ReadUserSetting.
     private const string PersonalizeKey =
-        @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+        @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
     // Whether applications are drawn dark — the switch the menu, the page and the starting card
     // follow. A high-contrast theme answers by its window colour instead.
@@ -26,7 +27,7 @@ internal static class ThemeIcons
             return brightness <= 128;
         }
 
-        var value = Registry.GetValue(PersonalizeKey, "AppsUseLightTheme", null);
+        var value = UserContext.ReadUserSetting(PersonalizeKey, "AppsUseLightTheme");
         return value is int light && light == 0;
     }
 

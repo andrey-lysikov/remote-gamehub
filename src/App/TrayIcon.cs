@@ -29,11 +29,12 @@ internal sealed class TrayIcon : IDisposable
     {
         _drawing = ThemeIcons.Load();
 
-        // No Text, and deliberately: the icon has no tooltip. The shell allows sixty-three
-        // characters for one; what the server is doing is on the page and in the log instead.
+        // The tooltip is the name and the version, nothing more: the shell allows sixty-three
+        // characters, and what the server is doing is on the page and in the log instead.
         _icon = new NotifyIcon
         {
             Icon = _drawing,
+            Text = $"{AppParameters.Identity.DisplayName} - v{Program.Version}",
             Visible = true,
         };
 
@@ -62,11 +63,23 @@ internal sealed class TrayIcon : IDisposable
 
         // The check margin is shown only when something can be checked: on a menu of plain
         // commands it is an empty column that makes every entry look indented for no reason.
+        var dark = ThemeIcons.AppsAreDark();
         var menu = new ContextMenuStrip
         {
             ShowImageMargin = false,
             ShowCheckMargin = list.Any(entry => entry.IsChecked is not null),
-            Renderer = MenuRendererFor(ThemeIcons.AppsAreDark()),
+            Renderer = MenuRendererFor(dark),
+        };
+
+        // Read again as the menu opens: the answer can arrive late under SYSTEM, once the
+        // signed-in account is known, and a theme change may reach this process as no event.
+        menu.Opening += (_, _) =>
+        {
+            var now = ThemeIcons.AppsAreDark();
+            if (now == dark) return;
+
+            dark = now;
+            menu.Renderer = MenuRendererFor(now);
         };
 
         foreach (var entry in list)

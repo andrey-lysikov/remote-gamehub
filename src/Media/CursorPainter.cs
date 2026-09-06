@@ -98,18 +98,25 @@ internal sealed unsafe class CursorPainter
     // where the pointer is, whether Windows considers it shown, and what it would look like.
     private void WatchWindowsPointer()
     {
-        while (_watching)
+        try
         {
-            try
+            while (_watching)
             {
-                Look();
-            }
-            catch (Exception error)
-            {
-                Log.Info($"the pointer could not be read from Windows: {error.Message}");
-            }
+                try
+                {
+                    Look();
+                }
+                catch (Exception error)
+                {
+                    Log.Info($"the pointer could not be read from Windows: {error.Message}");
+                }
 
-            Thread.Sleep(WatchIntervalMs);
+                Thread.Sleep(WatchIntervalMs);
+            }
+        }
+        finally
+        {
+            Session.InputDesktop.Detach();
         }
     }
 

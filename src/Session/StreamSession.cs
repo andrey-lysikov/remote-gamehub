@@ -12,9 +12,7 @@ using RemoteGameHub.Protocol;
 namespace RemoteGameHub.Session;
 
 // What a client asked for at /launch or /resume, before the RTSP negotiation fills in the rest.
-// AudioChannels comes from surroundAudioInfo and picks the sound device, before the game starts.
-// Width/Height/Fps/HdrRequested come from the same mode/hdrMode a moment before the RTSP ANNOUNCE
-// repeats them, and are zero/false when an older client sends neither.
+// The mode fields are zero/false when an older client sends none of them.
 internal sealed record LaunchRequest(int AppId, byte[] RiKey, uint RiKeyId, int AudioChannels = 2,
                                      int Width = 0, int Height = 0, int Fps = 0,
                                      bool HdrRequested = false);
@@ -40,9 +38,8 @@ internal sealed class SessionManager : IDisposable
     // rather than in the session: it is applied before the game starts, which is before there is one.
     private AudioAdaptation? _audio;
 
-    // The screen moved to the size and range the client asked for, same reasoning: a game reads
-    // HDR support once at its own startup, so this has to land before StartApplication, not after.
-    // Handed to the StreamSession once it exists; disposed here only if one never does.
+    // The screen moved to the client's size and range before StartApplication, since a game reads
+    // HDR support once at startup. Handed to the StreamSession; disposed here only if none comes.
     private DisplayAdaptation? _display;
 
     internal SessionManager(AppConfig config, DisplayOutput output, EncoderCapabilities encoder,
@@ -170,9 +167,8 @@ internal sealed class SessionManager : IDisposable
             return;
         }
 
-        // Taken over rather than reused as-is: ResolveOutput() re-picks the screen fresh, and a
-        // virtual display appearing between the launch and now would make the two disagree on
-        // which one this adaptation belongs to.
+        // Taken over rather than reused: ResolveOutput() re-picks the screen, and a virtual display
+        // appearing since the launch would make the two disagree on which one this belongs to.
         DisplayAdaptation? preAdapted;
         lock (_gate)
         {
@@ -374,9 +370,8 @@ internal sealed class SessionManager : IDisposable
         lock (_gate) _audio = adaptation;
     }
 
-    // Puts the screen where the client's mode and HDR ask, from the same numbers the RTSP ANNOUNCE
-    // repeats a moment later — before StartApplication, for the same reason MoveTheSound goes first.
-    // A client too old to send mode/hdrMode leaves this a no-op; Negotiated() adapts it as before.
+    // Puts the screen where the client's mode and HDR ask, before StartApplication for the same
+    // reason MoveTheSound goes first. A client too old to send them leaves this a no-op.
     private void AdaptTheScreen(LaunchRequest request)
     {
         DisplayAdaptation? previous;
@@ -422,14 +417,11 @@ internal sealed class SessionManager : IDisposable
 
         try
         {
-            // Started as the person signed in to the console whenever this server is SYSTEM, which
-            // it is when the service started it. A game run as SYSTEM would find none of that
-            // person's profile — no saves, no launcher session, no settings — and several refuse
-            // to start at all. The identity is the only difference; the shell resolves the command
-            // either way.
+            // As the person signed in whenever this server is SYSTEM: a game run as SYSTEM finds no
+            // saves, no launcher session, no settings, and several refuse to start at all.
             if (PlatformGuard.IsSystem)
             {
-                if (!SessionLauncher.StartGameAsConsoleUser(target.Command, target.InstallPath))
+                if (!SessionLauncher.StartAsConsoleUser(target.Command, target.InstallPath))
                     return false;
             }
             else
@@ -525,9 +517,8 @@ internal sealed class StreamSession : IDisposable
     // use changes in bursts with gaps between them, and those gaps are not idleness.
     private static readonly TimeSpan StillAfter = TimeSpan.FromSeconds(2);
 
-    // What to say when Windows will not hand over the screen. The two identities get different
-    // advice, because for one of them this is a bug to be fixed and for the other it is a moment
-    // to sit through: a server running as SYSTEM captures the prompt and the client answers it.
+    // What to say when Windows withholds the screen. Different advice per identity: for SYSTEM it
+    // is a moment to sit through (the client answers the prompt), for anyone else a bug to fix.
     private static string SecureDesktopNotice() => PlatformGuard.IsSystem
         ? "The desktop is being handed over — a prompt for administrator rights, the lock screen,\n" +
           "or the console moving between sessions. The picture holds still for the moment it\n" +
@@ -748,11 +739,6 @@ internal sealed class StreamSession : IDisposable
 
     internal void Start()
     {
-        // Network input is not "local" to Windows: left alone, the display sleeps and stops
-        // composing, and this server would go on sending the same last frame, a freeze.
-        Kernel32.SetThreadExecutionState(
-            Kernel32.ES_CONTINUOUS | Kernel32.ES_SYSTEM_REQUIRED | Kernel32.ES_DISPLAY_REQUIRED);
-
         _control.Start();
         _video.Start();
         _audio?.Start();
@@ -782,6 +768,11 @@ internal sealed class StreamSession : IDisposable
         IVideoEncoder? encoder = null;
         var clock = Stopwatch.StartNew();
         uint frameIndex = 0;
+
+        // Keeps the display composing: network input is not "local" to Windows. On this thread,
+        // since the state is the setting thread's own; set elsewhere it was never cleared.
+        Kernel32.SetThreadExecutionState(
+            Kernel32.ES_CONTINUOUS | Kernel32.ES_SYSTEM_REQUIRED | Kernel32.ES_DISPLAY_REQUIRED);
 
         try
         {
@@ -936,25 +927,20 @@ internal sealed class StreamSession : IDisposable
             // the first frame: see below.
             var hdrAnnounced = false;
 
-            // Consecutive lost duplications with nothing captured between. A mode change costs
-            // one; a screen gone for good would otherwise be reopened for ever. Only real failures
-            // are counted: a desktop Windows is withholding on purpose is waited out below.
+            // Consecutive lost duplications with nothing captured between: a mode change costs one,
+            // a screen gone for good must not be reopened for ever. Withheld desktops are not counted.
             var lostInARow = 0;
 
-            // When the desktop first became unavailable in the run of unavailability that is
-            // happening now, or MinValue when it is available. A UAC prompt, the lock screen or a
-            // session being handed over all land here, and all of them end on their own — so the
-            // stream is held open on its last picture rather than dropped, for far longer than the
-            // ten seconds a lost duplication is given. Zeroed the moment a frame comes back.
+            // When the desktop became unavailable (a prompt, the lock screen, a hand-over), all of
+            // which end on their own, so the stream is held on its last picture. Zeroed on a frame.
             var unavailableSince = TimeSpan.MinValue;
 
             // Says once per run of unavailability what is being waited for, rather than every
             // two hundred milliseconds.
             var unavailableSaid = false;
 
-            // Whether the desktop is unavailable now, and for how long. Ends the stream only when
-            // nothing has come back for the whole of the patience: a client left on a still
-            // picture for ever is worse than one told the session ended.
+            // Whether the desktop is unavailable now, and for how long. The stream ends only after
+            // the whole patience: a client left on a still picture for ever is worse than one told.
             bool WaitOutUnavailable()
             {
                 var now = clock.Elapsed;
@@ -1041,14 +1027,8 @@ internal sealed class StreamSession : IDisposable
 
                     var outcome = duplicator.Reopen();
 
-                    // Windows is withholding the screen on purpose — a UAC prompt or the lock
-                    // screen is in front. This is where a stream used to die: the duplication was
-                    // gone, every reopen was refused, and fifty refusals at two hundred
-                    // milliseconds ended the session ten seconds into a prompt nobody had had
-                    // time to answer. It is not a failure and is not counted as one. The loop
-                    // carries on to the sending below rather than going round again, because the
-                    // frame texture still holds the last picture and a client sent nothing at all
-                    // for seven seconds decides this machine has stopped and disconnects.
+                    // Windows withholds the screen on purpose (a prompt, the lock screen): not a
+                    // failure. Falls through to the sending, or a client sent nothing gives up in 7 s.
                     if (outcome == ReopenOutcome.Unavailable)
                     {
                         if (!WaitOutUnavailable()) return;
@@ -1088,12 +1068,21 @@ internal sealed class StreamSession : IDisposable
                                      "with it");
                         }
 
+                        // The shader follows the capture (a new size, or a desktop back in eight
+                        // bits), and the encoder takes what the shader writes or the capture itself.
+                        converter?.Dispose();
+                        converter = duplicator.IsHdrDesktop && hdr
+                            ? ColourConverter.Open(duplicator.Device, duplicator.Context,
+                                                   duplicator.Width, duplicator.Height,
+                                                   fullRange: false)
+                            : null;
+
                         encoder.Dispose();
                         encoder = VideoEncoders.Open(duplicator.Device, _capabilities,
                             _negotiation.Codec, duplicator.Width, duplicator.Height,
                             _negotiation.BitrateKbps, _negotiation.Fps,
-                            duplicator.FrameFormat == Dxgi.DXGI_FORMAT_R10G10B10A2_UNORM,
-                            _negotiation.Yuv444, _quality);
+                            hdr: converter is not null,
+                            yuv444: converter is null && _negotiation.Yuv444, _quality);
                         _keyFrameWanted = true;
 
                         continue;
@@ -1101,10 +1090,8 @@ internal sealed class StreamSession : IDisposable
                 }
                 else if (status == CaptureStatus.Unavailable)
                 {
-                    // The same waiting as above, reached the other way: AcquireNextFrame itself
-                    // refused rather than the reopen. The lock screen, a prompt on the secure
-                    // desktop, or a remote desktop connection taking the console away. It falls
-                    // through to the sending below for the same reason.
+                    // The same waiting reached the other way: AcquireNextFrame refused rather than
+                    // the reopen. Falls through to the sending for the same reason.
                     if (!WaitOutUnavailable()) return;
                 }
                 else
@@ -1234,6 +1221,11 @@ internal sealed class StreamSession : IDisposable
             // Last, after the duplication is gone: putting the screen back is itself a mode
             // change, which a live duplication would not survive.
             display?.Dispose();
+
+            // The hold on the display and the system, and the input desktop this thread attached
+            // itself to for the capture: both are this thread's own and go with it.
+            Kernel32.SetThreadExecutionState(Kernel32.ES_CONTINUOUS);
+            InputDesktop.Detach();
         }
     }
 
@@ -1330,10 +1322,6 @@ internal sealed class StreamSession : IDisposable
     {
         var whole = Stopwatch.StartNew();
         _running = false;
-
-        // Releases the hold Start() put on the display and the system, so this machine sleeps on
-        // its own schedule again once nothing is streaming from it.
-        Kernel32.SetThreadExecutionState(Kernel32.ES_CONTINUOUS);
 
         _gamepads.Feedback -= _rumble;
         _input.Release();

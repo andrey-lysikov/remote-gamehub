@@ -114,8 +114,9 @@ internal sealed class ClientInput
         _repeating = false;
         _repeatChanged.Set();
 
-        _repeatThread.Join(1000);
-        _repeatChanged.Dispose();
+        // Disposed only once the thread is known to be gone: a wait on a disposed event throws on
+        // that thread, and an unhandled exception there takes the whole process down.
+        if (_repeatThread.Join(1000)) _repeatChanged.Dispose();
     }
 
     // Told when the screen has been put into a different mode.
@@ -263,27 +264,34 @@ internal sealed class ClientInput
     // bound to the input desktop, and moving a pool thread there moves one the application shares.
     private void RepeatHeldKeys()
     {
-        while (_repeating)
+        try
         {
-            _repeatChanged.WaitOne();
-
-            var keyCode = _repeatKey;
-            if (!_repeating) return;
-            if (keyCode == 0) continue;
-
-            // Nothing repeats until the key has been held for the delay, and a key pressed or
-            // released in the meantime starts the wait over.
-            if (_repeatChanged.WaitOne(_repeatDelayMs)) continue;
-
-            while (_repeating && _repeatKey == keyCode)
+            while (_repeating)
             {
-                // The desktop can change while a key is held, and a repeat typed into the old one
-                // arrives nowhere: the key then looks stuck rather than repeating.
-                InputDesktop.Attach();
-                Press(keyCode, _repeatModifiers, down: true);
+                _repeatChanged.WaitOne();
 
-                if (_repeatChanged.WaitOne(_repeatIntervalMs)) break;
+                var keyCode = _repeatKey;
+                if (!_repeating) return;
+                if (keyCode == 0) continue;
+
+                // Nothing repeats until the key has been held for the delay, and a key pressed or
+                // released in the meantime starts the wait over.
+                if (_repeatChanged.WaitOne(_repeatDelayMs)) continue;
+
+                while (_repeating && _repeatKey == keyCode)
+                {
+                    // The desktop can change while a key is held, and a repeat typed into the old
+                    // one arrives nowhere: the key then looks stuck rather than repeating.
+                    InputDesktop.Attach();
+                    Press(keyCode, _repeatModifiers, down: true);
+
+                    if (_repeatChanged.WaitOne(_repeatIntervalMs)) break;
+                }
             }
+        }
+        finally
+        {
+            InputDesktop.Detach();
         }
     }
 

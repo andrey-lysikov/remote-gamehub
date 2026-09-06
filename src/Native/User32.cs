@@ -84,17 +84,8 @@ internal static class User32
     // what it would set the moment a pointer entered it.
     internal const int GCLP_HCURSOR = -12;
 
-    // The standard shapes, by the numeric identifiers winuser.h gives them. Only the log names
-    // them; what is drawn is whatever handle Windows hands back.
+    // The resting arrow, by the numeric identifier winuser.h gives it.
     internal static readonly nint IDC_ARROW = 32512;
-
-    internal static readonly (nint Id, string Name)[] StandardCursors =
-    {
-        (32512, "arrow"), (32513, "I-beam"), (32514, "wait"), (32515, "cross"),
-        (32516, "up arrow"), (32642, "resize nw-se"), (32643, "resize ne-sw"), (32644, "resize we"),
-        (32645, "resize ns"), (32646, "move"), (32648, "no"), (32649, "hand"),
-        (32650, "starting"), (32651, "help"),
-    };
 
     [DllImport("user32.dll")]
     internal static extern nint WindowFromPoint(Point point);

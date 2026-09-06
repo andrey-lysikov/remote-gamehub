@@ -620,9 +620,8 @@ internal sealed class WebConsole : IAsyncDisposable
             : "waiting for a client";
     }
 
-    // What this machine is, on the heading's line: the host name, the encoder, the size of the
-    // games list and how long the server has been up. Off or unavailable is left out rather than
-    // named, so the line is only ever what this machine can actually do right now.
+    // What this machine is, on the heading's line: host name, encoder, games and uptime. Off or
+    // unavailable is left out, so the line is only what this machine can do right now.
     private string HostLine()
     {
         var uptime = DateTimeOffset.Now - _started;
@@ -659,7 +658,7 @@ internal sealed class WebConsole : IAsyncDisposable
         // news about the server rather than about the machine.
         if (_updates.Newer is { } newer)
         {
-            machine.Add($"<a class=update href=\"{AppParameters.Links.LatestRelease}\" target=_blank " +
+            machine.Add($"<a class=update href=\"{Escape(_updates.Link)}\" target=_blank " +
                         $"rel=noopener>version {Escape(newer)} is out — download</a>");
         }
 

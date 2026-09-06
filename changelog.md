@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3
+
+* Fix the worker being ended by the service at every remote desktop connection
+* Add vscode bundles
+* Add macos/linux build scripts
+
 ## 1.2
 
 * Add service for UAC resolve

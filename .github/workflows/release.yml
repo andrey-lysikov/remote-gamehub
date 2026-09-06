@@ -1,8 +1,7 @@
 name: Release
 
-# The build runs on two conditions, both checked below: the version in the csproj is higher than
-# the newest tag, and changelog.md has a section for exactly that version. Anything else — a fix,
-# a comment, a rewritten readme — is pushed without producing a release.
+# A release is made only when the csproj version is higher than the newest tag and changelog.md
+# has a section for exactly that version. Anything else is pushed without producing one.
 
 on:
   push:

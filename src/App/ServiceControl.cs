@@ -9,13 +9,8 @@ using RemoteGameHub.Native;
 
 namespace RemoteGameHub.App;
 
-// The service, from the application's own side: made if it is not there, pointed at this copy if it
-// is there but stale, started when the application starts and stopped when it exits. Nobody has to
-// type anything — this server already runs with administrator rights, which is all that installing
-// a service needs.
-//
-// Through the service control API rather than sc.exe: sc prints in whatever language Windows was
-// installed in, and reading a service's state out of translated text is not something to build on.
+// The service from the application's side: made, re-pointed, started and stopped with it. Through
+// the service control API rather than sc.exe, whose output is in the language of the machine.
 internal static class ServiceControl
 {
     private const string Name = AppParameters.Identity.ServiceName;
@@ -35,9 +30,8 @@ internal static class ServiceControl
     private static string? CommandLine =>
         Environment.ProcessPath is { Length: > 0 } exe ? $"\"{exe}\" --service" : null;
 
-    // Makes the service if it is absent, points it at this copy if it names another, and starts it.
-    // Answers whether it is running afterwards; refusal tells the caller what to say and is never
-    // fatal — the server can still run in this process, only without the secure desktop.
+    // Makes the service if absent, re-points it if it names another copy, and starts it. refusal is
+    // never fatal: the server can still run in this process, only without the secure desktop.
     internal static bool EnsureRunning(out string refusal)
     {
         refusal = string.Empty;
@@ -83,12 +77,8 @@ internal static class ServiceControl
             else if (InstalledCommand() is { Length: > 0 } installed &&
                      !string.Equals(installed, command, StringComparison.OrdinalIgnoreCase))
             {
-                // The same name, running another copy of this executable: a portable folder that
-                // was moved, an installed copy taking over from one run out of Downloads, or a
-                // version left behind by an older release. Rewriting the command line alone would
-                // not be enough — a service already running goes on running the executable it was
-                // started with, and this launch would hand the machine to the old copy. It is
-                // stopped, taking its worker with it, and made again from nothing.
+                // The same name running another copy (a moved folder, an old release). Re-pointing
+                // is not enough while it runs the old exe, so it is stopped and made again.
                 Log.Event($"the service runs another copy of this server ({installed}); " +
                           "it is being stopped and made again for this one");
 
@@ -111,12 +101,8 @@ internal static class ServiceControl
         }
     }
 
-    // Stops the service, which ends the worker with it. Called when the server is on its way out,
-    // so that nothing is left running on a machine whose owner has just quit the application.
-    //
-    // wait is for the one caller that has something to do afterwards: the uninstaller, which is
-    // about to delete the executable the service is running. The server's own exit does not wait,
-    // because what it is waiting for is this process being ended.
+    // Stops the service and with it the worker, when the server is on its way out. wait is for the
+    // uninstaller, which is about to delete the exe the service runs; the server's exit never waits.
     internal static void StopIfRunning(bool wait = false)
     {
         var manager = Advapi32.OpenSCManager(null, null, Advapi32.SC_MANAGER_CONNECT);
@@ -173,20 +159,13 @@ internal static class ServiceControl
             return;
         }
 
-        // The service control manager says stopped the moment the service says so, which is a few
-        // instructions before that process actually goes and lets go of the executable it was
-        // running. Waiting the difference out here is what keeps the uninstaller from finding the
-        // file in use, and what keeps a copy taking over from another out of its ports.
+        // The manager says stopped a few instructions before the process lets go of the exe and
+        // the ports. Waiting that out keeps the uninstaller and a copy taking over out of trouble.
         Thread.Sleep(1000);
     }
 
-    // Whether the server the service starts has actually appeared. The service runs the same
-    // executable, so the name alone would find the service itself; the session tells them apart,
-    // since a service is in session 0 and what it starts is in this one.
-    //
-    // Asked because the alternative is silence: the copy a person started hands the machine to the
-    // service and exits, and if nothing comes up in its place there is nothing on screen and
-    // nothing in this log to say so — the service's own log is somewhere else entirely.
+    // Whether the server the service starts has appeared: the same exe name, told apart by session
+    // (the service is in 0). Asked because otherwise nothing on screen or in this log would say.
     internal static bool WaitForServer(TimeSpan patience)
     {
         var deadline = DateTime.UtcNow + patience;
@@ -223,10 +202,8 @@ internal static class ServiceControl
         return false;
     }
 
-    // Where the service writes what it did, which is not where the server writes what it did.
-    // Beside the executable, because that is the one folder every part of this agrees on: the
-    // service runs as LocalSystem and has no profile worth using, and the server's own log
-    // follows the configuration into the profile of whoever is signed in.
+    // Where the service writes its own log, which is not the server's: beside the executable, the
+    // one folder both agree on. The server's log follows the configuration into a profile.
     internal static string LogDirectory => AppContext.BaseDirectory;
 
     // Where it goes when the folder holding the executable cannot be written to — a read-only
@@ -295,9 +272,8 @@ internal static class ServiceControl
 
             try
             {
-                // Waited out: the file about to be deleted is the one the service was running, and
-                // the worker it started is another process holding the same file. Both are gone by
-                // the time this returns.
+                // Waited out: the file about to be deleted is the one the service and its worker
+                // are running. Both are gone by the time this returns.
                 StopIfRunning(wait: true);
 
                 if (!Advapi32.DeleteService(service))
@@ -354,9 +330,8 @@ internal static class ServiceControl
         return service;
     }
 
-    // The command line the installed service actually starts, or null when it cannot be read.
-    // From the registry rather than QueryServiceConfig, which would be a two-call dance with a
-    // sized buffer for one string that is written down in plain sight.
+    // The command line the installed service starts, or null. From the registry rather than
+    // QueryServiceConfig, a two-call dance with a sized buffer for one string in plain sight.
     private static string? InstalledCommand()
     {
         try
@@ -502,9 +477,8 @@ internal static class ServiceControl
 
     // ------------------------------------------------------------------ saying so
 
-    // This executable is a windowed one and has no console of its own, so the verbs borrow the
-    // prompt they were typed at. Everything is written to the log as well: started from Explorer
-    // or a script there is no console to borrow, and the answer must still be somewhere.
+    // A windowed exe has no console, so the verbs borrow the prompt they were typed at. The log
+    // gets everything too: started from Explorer there is no console to borrow.
     internal static void BorrowConsole() => Kernel32.AttachConsole(Kernel32.ATTACH_PARENT_PROCESS);
 
     private static void Say(string message, bool isError = false)

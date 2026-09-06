@@ -251,13 +251,16 @@ internal static unsafe class Wasapi
                     Com.VTable(store)[5])(store, &key, variant) < 0)
                 return null;
 
-            if (*(ushort*)variant != VT_LPWSTR) return null;
-
-            var text = Marshal.PtrToStringUni(*(nint*)(variant + 8));
-
-            // The string belongs to the property store until this is called.
-            PropVariantClear(variant);
-            return text;
+            // Cleared whatever the type turned out to be: the value belongs to the store until then.
+            try
+            {
+                if (*(ushort*)variant != VT_LPWSTR) return null;
+                return Marshal.PtrToStringUni(*(nint*)(variant + 8));
+            }
+            finally
+            {
+                PropVariantClear(variant);
+            }
         }
         finally
         {
@@ -286,19 +289,24 @@ internal static unsafe class Wasapi
                     Com.VTable(store)[5])(store, &key, variant) < 0)
                 return null;
 
-            if (*(ushort*)variant != VT_BLOB) return null;
+            try
+            {
+                if (*(ushort*)variant != VT_BLOB) return null;
 
-            // The BLOB union member: a byte count at offset 8, then — past the padding that aligns
-            // the pointer after it — the bytes themselves.
-            var size = *(uint*)(variant + 8);
-            var data = *(byte**)(variant + 16);
-            if (size == 0 || data is null) return null;
+                // The BLOB union member: a byte count at offset 8, then — past the padding that
+                // aligns the pointer after it — the bytes themselves.
+                var size = *(uint*)(variant + 8);
+                var data = *(byte**)(variant + 16);
+                if (size == 0 || data is null) return null;
 
-            var bytes = new byte[size];
-            new Span<byte>(data, (int)size).CopyTo(bytes);
-
-            PropVariantClear(variant);
-            return bytes;
+                var bytes = new byte[size];
+                new Span<byte>(data, (int)size).CopyTo(bytes);
+                return bytes;
+            }
+            finally
+            {
+                PropVariantClear(variant);
+            }
         }
         finally
         {

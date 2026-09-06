@@ -25,10 +25,8 @@ internal static class InputDesktop
 
     private const int LookAgainAfterMs = 200;
 
-    // Attaches this thread to whatever desktop currently has the input, when it is not there
-    // already. Called before a batch rather than once: the desktop changes under a running stream.
-    // force skips the throttle below, for the one caller that already knows the desktop moved:
-    // the capture, which is reopening a duplication precisely because Windows switched desktops.
+    // Attaches this thread to the desktop that has the input, before each batch since it changes
+    // under a stream. force skips the throttle for the capture, which knows the desktop moved.
     internal static void Attach(bool force = false)
     {
         // Not on every call. This runs once per sent frame and once per input packet — six hundred
@@ -40,10 +38,8 @@ internal static class InputDesktop
         var desktop = User32.OpenInputDesktop(0, false, User32.DESKTOP_ALL);
         if (desktop == 0)
         {
-            // The usual reason is the secure desktop, which only LocalSystem may open: a UAC
-            // prompt or the lock screen is in front and this copy is not the service's worker.
-            // This thread stays where it is; what it captures and types into is the desktop
-            // behind the prompt, which Windows will not show and will not accept input for.
+            // The usual reason is the secure desktop, which only LocalSystem may open. This thread
+            // stays where it is, on the desktop behind the prompt Windows will not show.
             App.Log.WarnOccasionally("input desktop closed",
                 "The desktop that has the input cannot be opened, which is what Windows answers\n" +
                 "while a UAC prompt or the lock screen is in front and this server is not running\n" +
@@ -83,6 +79,17 @@ internal static class InputDesktop
 
         Log.Info($"the input thread moved to the \"{name ?? "unnamed"}\" desktop, which is the one " +
                  "receiving input now");
+    }
+
+    // Lets go of the desktop handle this thread holds. Called as a thread ends: Windows closes
+    // nothing on its own when a thread goes, so every stream's threads left one handle each.
+    internal static void Detach()
+    {
+        var held = _attached;
+        _attached = 0;
+        _attachedName = null;
+
+        if (held != 0) User32.CloseDesktop(held);
     }
 
     private static string? NameOf(nint desktop)

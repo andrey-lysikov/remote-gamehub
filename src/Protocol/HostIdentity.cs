@@ -97,9 +97,11 @@ internal sealed class HostIdentity
 
     private static void Save(X509Certificate2 certificate, string path)
     {
+        using var key = certificate.GetRSAPrivateKey()!;
+
         var text = new StringBuilder();
         text.AppendLine(certificate.ExportCertificatePem());
-        text.AppendLine(certificate.GetRSAPrivateKey()!.ExportPkcs8PrivateKeyPem());
+        text.AppendLine(key.ExportPkcs8PrivateKeyPem());
 
         File.WriteAllText(path, text.ToString());
     }

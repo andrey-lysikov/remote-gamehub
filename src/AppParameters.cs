@@ -17,10 +17,8 @@ internal static class AppParameters
 
         internal const string LogFile = FileBase + ".log";
 
-        // The service's log, which is not the server's: they are two processes under two accounts,
-        // and appending to one file loses lines. Deliberately not FileBase-prefixed like the rest,
-        // because it sits in the same folder as the executable and a portable copy keeps the
-        // server's own Remote-Gamehub.log right beside it.
+        // The service's own log: two processes under two accounts appending to one file lose lines.
+        // Not FileBase-prefixed, since it sits beside the exe next to the server's own log.
         internal const string ServiceLogFile = "service.log";
         internal const string ConfFile = FileBase + ".conf";
 
@@ -35,9 +33,8 @@ internal static class AppParameters
         // is recognisable in Task Scheduler.
         internal const string StartupTask = DisplayName;
 
-        // The Windows service that keeps the server running as SYSTEM on the console. No spaces:
-        // this is the name every sc.exe command and the registry key use; DisplayName is what the
-        // services list shows.
+        // The Windows service that keeps the server running as SYSTEM. No spaces: this is the name
+        // every sc.exe command and the registry key use; DisplayName is what the services list shows.
         internal const string ServiceName = "RemoteGameHub";
     }
 
@@ -221,10 +218,8 @@ internal static class AppParameters
         // transition and a session switch. It is not an error; the duplication is re-created.
         internal const int RecreateDelayMs = 200;
 
-        // How long the desktop may be unavailable — a UAC prompt nobody answers, a lock screen —
-        // before the stream is ended rather than held open on a frozen picture. Generous on
-        // purpose: the whole point of the service is that a client can answer that prompt itself,
-        // and a person walking to the machine and back takes longer than a few seconds.
+        // How long the desktop may be unavailable (a UAC prompt, the lock screen) before the stream
+        // ends. Generous: a client can answer the prompt, and walking to the machine takes a while.
         internal const int UnavailablePatienceMs = 10 * 60 * 1000;
     }
 }

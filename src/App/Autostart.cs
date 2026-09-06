@@ -127,9 +127,8 @@ internal sealed class Autostart
     {
         XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
 
-        // The person signed in, not this process: the copy that writes this task is usually the
-        // service's worker, which is LocalSystem, and a task triggered by SYSTEM signing in would
-        // wait for a sign-in that never happens.
+        // The person signed in, not this process: the writer is usually the service's worker,
+        // LocalSystem, and a task triggered by SYSTEM signing in would wait for ever.
         string user;
         using (var identity = WindowsIdentity.GetCurrent())
         {

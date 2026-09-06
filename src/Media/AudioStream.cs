@@ -178,20 +178,8 @@ internal sealed class AudioStream : IDisposable
             var streams = _channels switch { 8 => _highQuality ? 8 : 5, 6 => _highQuality ? 6 : 4, _ => 1 };
             var coupled = _channels switch { 8 => _highQuality ? 0 : 3, 6 => _highQuality ? 0 : 2, _ => 1 };
 
-            // The mapping is the identity one on purpose, and it is deliberately not the mapping
-            // the DESCRIBE above advertises for these same layouts: see the surround-params lines
-            // in RtspServer, which rotate it. Both halves are what the reference server does, and
-            // the client is built for the pair.
-            //
-            // Concentus deprecates this call in favour of OpusCodecFactory, and this is the one
-            // place the factory cannot stand in for it. All it offers for several streams is the
-            // surround form, which picks the layout itself from a mapping family and hands back a
-            // mapping of its own, built for input in Vorbis speaker order. Asked for six channels
-            // it answers four streams and two coupled — the counts wanted here — with the mapping
-            // [0,4,1,2,3,5], which reads its input as front left, centre, front right, rears,
-            // then low frequency. What arrives here is what Windows captures: front left, front
-            // right, centre, low frequency, then the rears. Eight channels differ the same way.
-            // Only the deprecated call takes a layout and a mapping and uses them unchanged.
+            // The identity mapping, not the rotated one DESCRIBE advertises (see RtspServer); the
+            // deprecated call is the one that takes a layout and mapping unchanged, unlike the factory.
 #pragma warning disable CS0618
             var encoder = OpusMSEncoder.Create(SampleRate, _channels, streams, coupled, mapping,
                 OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY);

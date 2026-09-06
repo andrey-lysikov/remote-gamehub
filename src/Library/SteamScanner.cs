@@ -61,10 +61,11 @@ internal static class SteamScanner
     // than one account it points at the copy this user actually runs.
     private static string? FindSteam()
     {
-        var path = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Valve\Steam")
-                       ?.GetValue("SteamPath") as string
-                   ?? Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Valve\Steam")
-                       ?.GetValue("InstallPath") as string;
+        using var user = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Valve\Steam");
+        using var machine = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Valve\Steam");
+
+        var path = user?.GetValue("SteamPath") as string
+                   ?? machine?.GetValue("InstallPath") as string;
 
         if (string.IsNullOrWhiteSpace(path)) return null;
 

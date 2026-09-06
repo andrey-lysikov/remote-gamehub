@@ -3,14 +3,14 @@
 
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 using RemoteGameHub.Native;
 
 namespace RemoteGameHub.App;
 
-// The signed-in person, seen from a server that runs as LocalSystem. Their profile folder, so the
-// configuration and log sit where they set them, and their registry, so the game scan reads the
-// launchers they installed rather than SYSTEM's empty ones. Does nothing when not run as SYSTEM.
+// The signed-in person, seen from a server running as LocalSystem: their profile folder for the
+// configuration and log, their registry for the game scan. Does nothing when not run as SYSTEM.
 internal static class UserContext
 {
     // The console user's LocalAppData, resolved through their own token so redirected profiles
@@ -55,9 +55,67 @@ internal static class UserContext
         }
     }
 
-    // Runs the work as the console user, so Registry.CurrentUser and the like answer for them.
-    // Runs it as-is (no impersonation) when there is no user token to borrow — an ordinary
-    // elevated run, where the process already is the user.
+    // The console user's identifier, found once: the worker lives and dies with one session, and
+    // the page asks for the theme every second, which was a token opened every second.
+    private static string? _consoleUserSid;
+    private static bool _fallbackSaid;
+
+    // The console user's security identifier as text, or null for the same reasons as above.
+    internal static string? ConsoleUserSid()
+    {
+        if (_consoleUserSid is not null) return _consoleUserSid;
+
+        var token = OpenConsoleUserToken();
+        if (token == 0) return null;
+
+        try
+        {
+            using var identity = new WindowsIdentity(token);
+            return _consoleUserSid = identity.User?.Value;
+        }
+        catch (Exception error)
+        {
+            Log.Info($"the signed-in account could not be identified: {error.Message}");
+            return null;
+        }
+        finally
+        {
+            Kernel32.CloseHandle(token);
+        }
+    }
+
+    // A value from the signed-in person's registry, reached through HKEY_USERS by their SID under
+    // SYSTEM (whose own HKCU has no theme or accent). Null when the key or value is not there.
+    internal static object? ReadUserSetting(string subKey, string name)
+    {
+        try
+        {
+            if (PlatformGuard.IsSystem)
+            {
+                if (ConsoleUserSid() is { } sid)
+                    return Registry.GetValue($@"HKEY_USERS\{sid}\{subKey}", name, null);
+
+                // Said once: SYSTEM's own profile has never been personalised, so what follows is
+                // the default theme and the default accent, whatever the person chose.
+                if (!_fallbackSaid)
+                {
+                    _fallbackSaid = true;
+                    Log.Warn("the signed-in account could not be identified, so the theme and the " +
+                             "accent colour are read from SYSTEM's own profile: light, unpersonalised");
+                }
+            }
+
+            return Registry.GetValue($@"HKEY_CURRENT_USER\{subKey}", name, null);
+        }
+        catch (Exception error)
+        {
+            Log.Info($"the setting {subKey}\\{name} could not be read: {error.Message}");
+            return null;
+        }
+    }
+
+    // Runs the work as the console user, so Registry.CurrentUser and the like answer for them;
+    // as-is when there is no token to borrow, which is an ordinary run that already is the user.
     internal static void AsConsoleUser(Action work)
     {
         var raw = OpenConsoleUserToken();
@@ -89,15 +147,13 @@ internal static class UserContext
         // Only LocalSystem may ask, and only it needs to: an ordinary run is already the user.
         if (!PlatformGuard.IsSystem) return 0;
 
-        // WTSQueryUserToken is refused outright without SeTcbPrivilege. LocalSystem holds it, but
-        // holding a privilege and having it switched on are different things, and this is asked
-        // for on the way in rather than assumed. Without it the call quietly answers nothing, and
-        // "nothing" here means the configuration and the log move to SYSTEM's own profile under
-        // System32 — where they are read from and written to correctly, and where nobody would
-        // ever think to look for them.
+        // WTSQueryUserToken is refused without SeTcbPrivilege switched on, and quietly: without this
+        // the configuration and the log would move to SYSTEM's profile under System32.
         SessionLauncher.EnablePrivileges();
 
-        var session = Wtsapi32.WTSGetActiveConsoleSessionId();
+        // This process's own session, not the console's: over remote desktop the console is a
+        // sign-in screen with nobody on it, and the worker was put where the person is.
+        var session = Wtsapi32.ServedSessionId();
         if (session == Wtsapi32.NoSession) return 0;
 
         if (Wtsapi32.WTSQueryUserToken(session, out var token)) return token;

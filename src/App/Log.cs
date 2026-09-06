@@ -33,9 +33,8 @@ internal static class Log
 
     internal static string? Path => _path;
 
-    // Opens the log beside the configuration, falling back to fallbackDirectory. If neither can be
-    // written the application starts anyway. fileName is for the service, which writes a log of its
-    // own next to the executable rather than sharing the server's.
+    // Opens the log beside the configuration, else in fallbackDirectory; if neither can be written
+    // the application starts anyway. fileName is for the service, which keeps a log of its own.
     internal static void Start(string preferredDirectory, string fallbackDirectory, string version,
                                string? fileName = null)
     {

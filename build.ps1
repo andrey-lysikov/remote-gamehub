@@ -1,18 +1,7 @@
 #Requires -Version 5.1
 
-<#
-    Builds the server. Run it plainly and the tests run and the exe alone comes out:
-
-        ./build.ps1
-
-    With -Installer the msi follows it, built around the same exe:
-
-        ./build.ps1 -Installer
-
-    Nothing is downloaded here. The .NET Desktop Runtime and the ViGEmBus driver are the business
-    of installer/Prerequisites.ps1, which travels inside the msi and runs on the machine that
-    installs. Building the msi needs the WiX toolset, installed here when it is missing.
-#>
+# Builds the server: tests, then the exe; with -Installer the msi around it (WiX is installed if
+# missing). Nothing is downloaded here — see installer/Prerequisites.ps1 for the runtime and driver.
 
 param(
     # Package the installer as well as the exe.
@@ -40,9 +29,8 @@ $wixWork = Join-Path $wixDir 'obj'
 
 $wixVersion = '6.0.2'
 
-# What MSBuild leaves next to the sources, and what WiX leaves beside the packages. Removed when
-# the script ends, whether it succeeded or not: the release build happens in a GitHub Action, and
-# a local run should leave only what was asked for.
+# What MSBuild and WiX leave beside the sources and packages. Removed when the script ends, whatever
+# the outcome: the release build happens in a GitHub Action, and a local run leaves only its result.
 $leftovers = @(
     (Join-Path $source 'bin'), (Join-Path $source 'obj'),
     (Join-Path $tests  'bin'), (Join-Path $tests  'obj'),
@@ -79,9 +67,8 @@ try {
 
     Write-Step 'Building the exe'
 
-    # The server puts its own files next to the exe, that is, here. The folder must not be removed
-    # wholesale — that would wipe the configuration, the log, the database and the certificate
-    # along with the build.
+    # The server keeps its own files beside the exe, here. Never remove the folder wholesale: that
+    # would wipe the configuration, the log, the database and the certificate with the build.
     if (Test-Path $exe) { Remove-Item $exe -Force }
 
     # Every publish switch is already in the csproj: single-file, framework-dependent, win-x64.
@@ -106,9 +93,8 @@ try {
     $manufacturer = "$($properties.Company | Where-Object { $_ })".Trim()
     if (-not $manufacturer) { throw "No <Company> in $project" }
 
-    # The version is two numbers everywhere in this project — 0.1, never 0.1.0 — and Windows
-    # Installer wants three. The third is added here and nowhere else, so the msi says 0.1.0 while
-    # the exe, the log and the release page all say 0.1.
+    # Two-number versions everywhere (0.1, never 0.1.0), but Windows Installer wants three. The
+    # third is added here and nowhere else: the msi says 0.1.0, the exe, log and release page 0.1.
     $msiVersion = if ($Version -match '^\d+\.\d+$') { "$Version.0" } else { $Version }
 
     New-Item -ItemType Directory -Force -Path $wixWork | Out-Null

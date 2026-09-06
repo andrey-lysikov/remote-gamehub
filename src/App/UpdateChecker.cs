@@ -28,9 +28,13 @@ internal sealed class UpdateChecker : IDisposable
 
     private readonly CancellationTokenSource _stopping = new();
     private volatile string? _newer;
+    private volatile string? _link;
 
     // The newer version, once one is known; null until then.
     internal string? Newer => _newer;
+
+    // The page of that release, as GitHub named it; the fixed "latest" address until one is known.
+    internal string Link => _link ?? AppParameters.Links.LatestRelease;
 
     // Raised once per newer version found — not at every daily check that finds the same one
     // again, because a balloon a day about the same release is nagging.
@@ -84,14 +88,26 @@ internal sealed class UpdateChecker : IDisposable
             var latest = (tag.GetString() ?? string.Empty).TrimStart('v', 'V');
             if (latest.Length == 0) return null;
 
+            // The release's own page, checked against the project: an answer from anywhere else
+            // (a renamed or redirected repository) is not news about this server and is dropped.
+            var page = document.RootElement.TryGetProperty("html_url", out var url) ? url.GetString() : null;
+            if (page is not null &&
+                !page.StartsWith(AppParameters.Links.Project + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Warn($"update check: {AppParameters.Links.LatestReleaseApi} answered with a " +
+                         $"release of another project ({page}); it is ignored");
+                return null;
+            }
+
             var current = Program.Version;
-            Log.Info($"update check: running {current}, latest {latest}");
+            Log.Info($"update check: running {current}, latest {latest} ({page ?? "no page named"})");
 
             if (!IsNewer(latest, current)) return null;
 
             if (_newer != latest)
             {
                 _newer = latest;
+                _link = page;
                 Found?.Invoke(latest);
             }
 

@@ -65,18 +65,14 @@ internal sealed class DisplayAdaptation : IDisposable
 
                 if (scaleForClient)
                 {
-                    // By the size the client asked for, not the mode the screen landed on: a
-                    // client up to 2K gets its desktop at 100% whatever the screen managed, and
-                    // one above 2K gets it scaled even when the screen could only go as far as
-                    // 2K or lower to meet it.
+                    // By the size the client asked for, not the mode the screen landed on: up to 2K
+                    // the desktop is at 100%, above it scaled, whatever the screen managed.
                     previousScale = ApplyScale(name, width, height);
                 }
                 else if (isGame)
                 {
-                    // Always 100%, whatever it happened to be left at by an earlier desktop
-                    // stream: a game reading a stale scale would draw its UI and cursor at the
-                    // wrong size for as long as it runs. The desktop stream is the only one this
-                    // server ever scales up.
+                    // Always 100%, whatever an earlier desktop stream left: a game reading a stale
+                    // scale draws its UI and cursor wrong for as long as it runs.
                     previousScale = ForceScale100(name);
                 }
             }
@@ -104,11 +100,8 @@ internal sealed class DisplayAdaptation : IDisposable
     private const int UnscaledWidth = 2560;
     private const int UnscaledHeight = 1440;
 
-    // Sets the desktop scale for the client's size. A client that fits within 2K gets 100%
-    // whatever the screen was left at; one above 2K gets its own proportion of extra pixels
-    // over the ordinary desktop size, stepped to the nearest 25% — even when the screen could
-    // not match it and stayed at 2K or lower. Returns the setting replaced or null. From 100%,
-    // not the current one, which compounded stream by stream.
+    // Sets the desktop scale for the client's size: 100% within 2K, above it the extra pixels over
+    // the ordinary desktop stepped to 25%, always from 100%. Returns the setting replaced or null.
     private static int? ApplyScale(string deviceName, int clientWidth, int clientHeight)
     {
         if (clientWidth <= 0 || clientHeight <= 0) return null;

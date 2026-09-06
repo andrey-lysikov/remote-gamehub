@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<!--
-  One dialog of our own, wedged into the stock advanced set between the folder page and the last
-  one: where the shortcuts go. The stock sets have no page for that — they offer a tree of
-  features instead, which names the same two things in the language of an installer rather than
-  in the language of someone installing.
-
-  The geometry follows the stock dialogs exactly (370 x 270, the banner at the top, the buttons at
-  the bottom), or this page would jump when it comes up between two of theirs.
--->
+<!-- Our one dialog, between the stock folder page and the last one: where the shortcuts go. The
+     geometry (370 x 270, banner, buttons) follows the stock dialogs so the page does not jump. -->
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
@@ -32,8 +25,7 @@
                  Text="Add a shortcut to the desktop" />
 
         <!-- The same question the stock last page can ask, asked here instead: there the checkbox
-             is drawn by a control of the set over the white of that page and comes out in a grey
-             box of its own. Here it sits on the same ground as the two above it. -->
+             comes out in a grey box of its own; here it sits on the same ground as the two above. -->
         <Control Id="LaunchCheckBox" Type="CheckBox" X="20" Y="87" Width="330" Height="15"
                  Property="LAUNCHAFTERINSTALL" CheckBoxValue="1"
                  Text="Start the server when the installer finishes" />
@@ -44,9 +36,8 @@
                  Property="INSTALLVIGEM" CheckBoxValue="1"
                  Text="Install the ViGEmBus virtual controller driver" />
 
-        <!-- Off by default, and this package never fetches the driver itself: checking this only
-             opens its own page, so the choice of installing it stays there, and turns on
-             [General] VirtualDisplay so the server looks for it once it is. -->
+        <!-- Off by default, and the driver is never fetched: checking this opens its page and turns
+             on [General] VirtualDisplay so the server looks for it once installed. -->
         <Control Id="VddCheckBox" Type="CheckBox" X="20" Y="119" Width="330" Height="15"
                  Property="INSTALLVDD" CheckBoxValue="1"
                  Text="Open the virtual display driver's page, and use one once it is installed" />

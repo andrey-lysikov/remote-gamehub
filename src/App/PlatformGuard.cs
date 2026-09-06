@@ -26,9 +26,8 @@ internal static class PlatformGuard
         }
     }
 
-    // Whether this process is LocalSystem, which is what the service starts the server as. It is
-    // the one identity Windows lets capture and type into the secure desktop — the UAC prompt and
-    // the lock screen — so several paths ask, and answer differently when it is false.
+    // Whether this process is LocalSystem, as the service starts the server: the one identity that
+    // can capture and type into the secure desktop, so several paths ask and act on the answer.
     internal static bool IsSystem
     {
         get
