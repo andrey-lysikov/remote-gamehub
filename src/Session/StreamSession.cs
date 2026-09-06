@@ -529,6 +529,8 @@ internal sealed class StreamSession : IDisposable
     // use changes in bursts with gaps between them, and those gaps are not idleness.
     private static readonly TimeSpan StillAfter = TimeSpan.FromSeconds(2);
 
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+
     // What to say when Windows withholds the screen. Different advice per identity: for SYSTEM it
     // is a moment to sit through (the client answers the prompt), for anyone else a bug to fix.
     private static string SecureDesktopNotice() => PlatformGuard.IsSystem
