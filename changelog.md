@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4
+
+* Installer now can update installed program
+* Recreate display if RDP session is active
+
 ## 1.3
 
 * Fix the worker being ended by the service at every remote desktop connection

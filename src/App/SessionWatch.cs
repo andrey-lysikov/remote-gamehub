@@ -1,7 +1,10 @@
 //  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using RemoteGameHub.Native;
 
 namespace RemoteGameHub.App;
 
@@ -36,19 +39,93 @@ internal sealed class SessionWatch : IDisposable
         ? "waiting for a client — remote desktop session"
         : "waiting for a client";
 
-    // The whole explanation, for the log, written at startup and at every change. Duplication does
-    // work in a remote session; without the line a picture of the wrong desktop reads as a fault.
+    // The whole explanation, for the log, written at startup and at every change: a remote desktop
+    // connection ending the moment a stream starts reads as a fault without this line.
     internal string Describe() => IsRemote
         ? "This session belongs to remote desktop, not to the console.\n" +
-          "What is captured is therefore that session's desktop — which is what a client will see,\n" +
-          "and it is not the screen a monitor is plugged into. To stream the console's screen, hand\n" +
-          "the session back to it: \"tscon 1 /dest:console\" from an elevated prompt."
+          "There is no screen to capture here: a remote desktop is drawn by a display adapter that\n" +
+          "cannot be duplicated, and the card's own output is not attached to this session.\n" +
+          "The console is therefore taken back as soon as a client asks to stream, which ends the\n" +
+          $"remote desktop connection. To do it now: \"tscon {Wtsapi32.ServedSessionId()} " +
+          "/dest:console\" from an elevated prompt."
         : "this session is on the console";
+
+    // Hands this session back to the console, as "tscon <id> /dest:console" does by hand: a remote
+    // desktop has no output DXGI can duplicate, so the connection is spent to get a picture at all.
+    internal bool ReclaimConsole()
+    {
+        if (!IsRemote) return true;
+
+        var own = Wtsapi32.ServedSessionId();
+        var console = Wtsapi32.WTSGetActiveConsoleSessionId();
+
+        if (own == Wtsapi32.NoSession || console == Wtsapi32.NoSession || own == 0)
+        {
+            Log.Warn("the console cannot be taken back: Windows names no session to move, or none " +
+                     "holding the console. This passes on its own; the stream has no picture until " +
+                     "it does.");
+            return false;
+        }
+
+        if (own == console)
+        {
+            // Already this session's yet still reported remote: the move is under way, or a
+            // shadowed session is looking on. Nothing to ask for twice.
+            Settle("the console is already this session's");
+            return !IsRemote;
+        }
+
+        // Only LocalSystem holds SE_TCB_NAME, without which Windows refuses the move rather than
+        // asking for a password. Administrator rights are not enough.
+        if (!PlatformGuard.IsSystem)
+        {
+            Log.Warn(
+                "This stream has no picture: the session is on remote desktop, where there is no\n" +
+                "screen to capture, and this server may not hand it back to the console.\n" +
+                "Only a server running as LocalSystem can, which is what the installed service\n" +
+                $"makes it: \"{Environment.ProcessPath}\" install-service\n" +
+                $"What to do now: \"tscon {own} /dest:console\" from an elevated prompt.");
+            return false;
+        }
+
+        Log.Event($"the stream needs a screen and this session has none: session {own} is being " +
+                  $"handed back to the console (session {console} holds it now). The remote " +
+                  "desktop connection ends as the session moves — that is what taking the console " +
+                  "back means.");
+
+        // The empty password is what tscon.exe passes, and the only thing that works: a null one
+        // is dereferenced by the RPC stub before SE_TCB_NAME is looked at, and answers 1780.
+        if (!Wtsapi32.WTSConnectSession(own, console, string.Empty, true))
+        {
+            var error = Marshal.GetLastWin32Error();
+            Log.Warn(
+                $"the session could not be handed to the console (WTSConnectSession failed with " +
+                $"{error}: {new Win32Exception(error).Message}). The stream goes on without a " +
+                $"picture until the console is taken back by hand: \"tscon {own} /dest:console\" " +
+                "from an elevated prompt.");
+            return false;
+        }
+
+        // The call returns when the session has moved, but the metric behind IsRemoteSession
+        // follows a moment later, and everything after this would be told "none" too early.
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(AppParameters.Handover.SessionMs);
+
+        while (PlatformGuard.IsRemoteSession && DateTime.UtcNow < deadline)
+            Thread.Sleep(AppParameters.Handover.PollMs);
+
+        Settle("the console was taken back");
+        return !IsRemote;
+    }
 
     private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
     {
-        // Every one of these can change the answer, and asking Windows again is cheaper than
-        // working out from the reason which of them did.
+        Settle($"the session changed ({e.Reason})");
+    }
+
+    // Asks Windows again and says so when the answer turned over. Every session switch can change
+    // it, and asking is cheaper than working out from the reason which of them did.
+    private void Settle(string what)
+    {
         var suspended = PlatformGuard.IsRemoteSession;
 
         bool changed;
@@ -62,7 +139,7 @@ internal sealed class SessionWatch : IDisposable
 
         // An event, not a warning: this is what the server was asked to sit through, and it is
         // said only when the answer to "can the console be streamed" actually turned over.
-        Log.Event($"the session changed ({e.Reason}). {Describe()}");
+        Log.Event($"{what}. {Describe()}");
         Changed?.Invoke(this);
     }
 

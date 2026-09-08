@@ -130,4 +130,30 @@ public class SmallPiecesTests
     {
         Assert.Equal(kbps, StreamNegotiation.AudioBitrateFor(channels, highQuality));
     }
+
+    [Theory]
+    [InlineData("172.30.212.52", "172.30.212.52")]
+    [InlineData("192.168.1.5", "192.168.1.5")]
+    [InlineData("::ffff:172.30.212.52", "172.30.212.52")]
+    public void The_address_told_to_a_client_is_the_one_it_reached(string local, string expected)
+    {
+        Assert.Equal(expected, Peer.ThisMachine(new IPEndPoint(IPAddress.Parse(local), 47989)));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("0.0.0.0")]
+    [InlineData("127.0.0.1")]
+    [InlineData("169.254.10.10")]
+    public void A_client_is_never_told_an_address_it_cannot_dial(string? local)
+    {
+        // Loopback is allowed as the last resort — a machine with no card up has nothing else —
+        // but the unspecified and link-local answers are the ones a client silently fails on.
+        var endpoint = local is null ? null : new IPEndPoint(IPAddress.Parse(local), 47989);
+
+        var answer = IPAddress.Parse(Peer.ThisMachine(endpoint));
+
+        Assert.NotEqual(IPAddress.Any, answer);
+        Assert.False(answer.GetAddressBytes() is [169, 254, ..]);
+    }
 }

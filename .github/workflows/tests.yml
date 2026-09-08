@@ -1,0 +1,25 @@
+name: Tests
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      - name: Run the tests
+        shell: pwsh
+        run: |
+          dotnet test test/RemoteGameHub.Tests.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }

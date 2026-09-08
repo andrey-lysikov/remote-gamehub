@@ -21,6 +21,6 @@ Remote-Gamehub-capture.png
 Remote-Gamehub.db
 .DS_Store
 covers/
-# What WiX leaves beside the installer sources; build.ps1 clears it after every run.
+# What WiX leaves beside the installer sources; installer/installer.ps1 clears it after each run.
 installer/obj/
 *.wixpdb

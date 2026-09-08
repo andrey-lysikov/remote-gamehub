@@ -135,10 +135,19 @@ public class DisplayInventoryTests
 
     [Theory]
     [InlineData("Virtual Display Driver", true)]
+    [InlineData("Virtual Display Driver (HDR)", true)]
+    [InlineData("IddSampleDriver Device", true)]
     [InlineData("IddSampleDriver Device HDR", true)]
+    [InlineData("Parsec Virtual Display Adapter", true)]
+    [InlineData("usbmmidd", true)]
+    [InlineData("USB Mobile Monitor Virtual Display", true)]
+    [InlineData("virtual display driver", true)]
+    // The three that share this machine with a virtual display and must never be taken for one:
+    // the second is what an RDP session draws on, and choosing it is the fault this all guards.
     [InlineData("NVIDIA GeForce RTX 4080", false)]
-    [InlineData("Virtual Display Driver (old)", false)]
-    public void Only_the_names_the_driver_itself_uses_count_as_a_virtual_display(string name, bool isVirtual)
+    [InlineData("Microsoft Remote Display Adapter", false)]
+    [InlineData("Microsoft Basic Render Driver", false)]
+    public void A_virtual_display_is_known_by_its_name_whatever_a_build_appends(string name, bool isVirtual)
     {
         var adapter = Adapter(0, name);
 

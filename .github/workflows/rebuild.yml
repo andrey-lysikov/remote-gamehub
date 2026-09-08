@@ -1,8 +1,5 @@
 name: Rebuild
 
-# Replaces the files attached to a release with ones built from the branch. Started by hand only:
-# the version, tag and description stay; only the files and the link to the commits change.
-
 on:
   workflow_dispatch:
     inputs:
@@ -15,14 +12,16 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
   rebuild:
+    needs: test
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v7
         with:
-          # The whole history: the description of the release links to the commits, and that link
-          # is rewritten below.
           fetch-depth: 0
 
       - uses: actions/setup-dotnet@v6
@@ -41,27 +40,28 @@ jobs:
 
           Write-Host "Rebuilding the installer of $tag from $($env:GITHUB_SHA)"
 
-          # The installer's own version must be the one on the release page, not the branch's.
-          # Two numbers, as everywhere in this project; a third is tolerated.
           $version = $tag -replace '^v', ''
           if ($version -notmatch '^\d+\.\d+(\.\d+)?$') { throw "The tag $tag is not a version." }
 
           "tag=$tag"         >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Build
+      - name: Build the server
         shell: pwsh
-        # The same script a developer runs, with the version of the release being rebuilt rather
-        # than the branch's: an installer announcing another number would contradict its page.
-        run: ./build.ps1 -Installer -Version ${{ steps.target.outputs.version }}
+        run: ./build.ps1
 
-      - name: Replace the files
+      # The tests have already passed in the job above, which is why neither script runs them.
+      - name: Build the installer
+        shell: pwsh
+        run: ./installer/installer.ps1 -Version ${{ steps.target.outputs.version }}
+
+      - name: Replace the installer
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ steps.target.outputs.tag }} 'build/Remote-Gamehub.msi' 'build/Remote-Gamehub.exe' --clobber
-          if ($LASTEXITCODE -ne 0) { throw 'The files were not uploaded.' }
+          gh release upload ${{ steps.target.outputs.tag }} 'build/Remote-Gamehub.msi' --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'The installer was not uploaded.' }
 
       - name: Point the list of commits at what was built
         shell: pwsh
@@ -71,8 +71,6 @@ jobs:
           $tag = '${{ steps.target.outputs.tag }}'
           $sha = '${{ github.sha }}'
 
-          # Only the line with the link is touched; the hand-written description is left alone.
-          # gh hands the body back line by line, so it is joined and split once more (no stray CRs).
           $body = (gh release view $tag --json body --jq '.body') -join "`n"
           $lines = $body -split "`r?`n"
           $changed = $false
@@ -88,7 +86,7 @@ jobs:
 
           if (-not $changed) {
             Write-Host 'No link to the commits in the description — it is left as it is.'
-            "## Rebuilt`n`nThe files of $tag were replaced with a build of $sha." >> $env:GITHUB_STEP_SUMMARY
+            "## Rebuilt`n`nThe installer of $tag was replaced with a build of $sha." >> $env:GITHUB_STEP_SUMMARY
             exit 0
           }
 
@@ -96,4 +94,4 @@ jobs:
           gh release edit $tag --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'The description was not updated.' }
 
-          "## Rebuilt`n`nThe files of $tag were replaced with a build of $sha, and the list of commits now ends there." >> $env:GITHUB_STEP_SUMMARY
+          "## Rebuilt`n`nThe installer of $tag was replaced with a build of $sha, and the list of commits now ends there." >> $env:GITHUB_STEP_SUMMARY

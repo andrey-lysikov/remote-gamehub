@@ -220,4 +220,18 @@ internal static class AppParameters
         // ends. Generous: a client can answer the prompt, and walking to the machine takes a while.
         internal const int UnavailablePatienceMs = 10 * 60 * 1000;
     }
+
+    // Taking the console back from a remote desktop session, so that there is a screen at all.
+    // Windows moves the session in a moment; the graphics behind it take appreciably longer.
+    internal static class Handover
+    {
+        // How long the session is given to stop being a remote one after WTSConnectSession returns.
+        internal const int SessionMs = 10 * 1000;
+
+        // How long a screen is then given to appear; a monitor waking to answer the card is slow.
+        internal const int ScreenMs = 20 * 1000;
+
+        // Between one look and the next while waiting for either of those.
+        internal const int PollMs = 250;
+    }
 }

@@ -1,4 +1,4 @@
-﻿//  Copyright © AndreyLysikov
+//  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Diagnostics;
@@ -210,9 +210,9 @@ internal sealed class DisplayAdaptation : IDisposable
             return null;
         }
 
-        if (!Set(deviceName, wanted))
+        if (!SetPatiently(deviceName, wanted))
         {
-            Log.Warn($"the screen refused {wanted}; it stays at {current}");
+            Log.Warn($"the screen refused {wanted} on {ModeAttempts} tries; it stays at {current}");
             return null;
         }
 
@@ -220,6 +220,27 @@ internal sealed class DisplayAdaptation : IDisposable
                  $"the screen was {current} and is now {wanted}, and will be put back afterwards");
 
         return current;
+    }
+
+    // A screen that has only just come back — the console handed over from remote desktop, a
+    // monitor waking — refuses a mode it lists as supported until its stack settles.
+    private const int ModeAttempts = 4;
+    private const int ModeRetryDelayMs = 250;
+
+    private static bool SetPatiently(string deviceName, DisplayMode wanted)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            if (Set(deviceName, wanted))
+            {
+                if (attempt > 1) Log.Info($"the screen took {wanted} on try {attempt}");
+                return true;
+            }
+
+            if (attempt >= ModeAttempts) return false;
+
+            Thread.Sleep(ModeRetryDelayMs);
+        }
     }
 
     // HDR on when the client can show it and the card can encode it in ten bits, off otherwise —

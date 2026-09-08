@@ -1,4 +1,4 @@
-﻿//  Copyright © AndreyLysikov
+//  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.ComponentModel;
@@ -126,11 +126,16 @@ internal static class ServiceHost
         // The session the worker was started in; NoSession while there is no worker.
         var workerSession = Wtsapi32.NoSession;
 
-        // When the worker was last started and how long to wait before the next start: a worker
-        // that refuses to run exits in under a second, so each quick exit doubles the wait.
+        // When the worker was last started and when it ended. The wait before the next start is
+        // measured from the end: from the start, one that ran for hours has always waited enough.
         var startedAt = DateTime.MinValue;
+        var endedAt = DateTime.MinValue;
         var backoff = TimeSpan.Zero;
         var maximumBackoff = TimeSpan.FromMinutes(1);
+
+        // Settling time after any death: a sign-out or a shutdown ends the worker seconds before
+        // Windows admits the session is going, and one started into those seconds dies at once.
+        var settle = TimeSpan.FromSeconds(3);
 
         // Quick exits in a row. A refusal will not change by being asked again, so after this many
         // the service stops itself; the worker's log has the reason and a new start tries again.
@@ -185,10 +190,11 @@ internal static class ServiceHost
                 var lived = DateTime.UtcNow - startedAt;
                 var quickly = lived < TimeSpan.FromSeconds(20);
 
+                endedAt = DateTime.UtcNow;
                 backoff = quickly
                     ? TimeSpan.FromSeconds(Math.Min(maximumBackoff.TotalSeconds,
                                                     Math.Max(2, backoff.TotalSeconds * 2)))
-                    : TimeSpan.Zero;
+                    : settle;
 
                 failures = quickly ? failures + 1 : 0;
 
@@ -210,9 +216,9 @@ internal static class ServiceHost
                 }
 
                 Log.Warn($"the worker ended after " +
-                         $"{lived.TotalSeconds:0} s; it will be started again" +
-                         (backoff > TimeSpan.Zero ? $" in {backoff.TotalSeconds:0} s" : " now") +
-                         ". Its own lines above say why it stopped.");
+                         $"{lived.TotalSeconds:0} s; it will be started again in " +
+                         $"{backoff.TotalSeconds:0} s, if there is still somebody to start it for. " +
+                         "Its own lines above say why it stopped.");
             }
 
             // Whether there is anybody to stream for, said only when the answer changes and never
@@ -235,7 +241,9 @@ internal static class ServiceHost
                       "as soon as that changes.");
             }
 
-            if (_worker == 0 && ready && DateTime.UtcNow - startedAt >= backoff)
+            // The target is the one read at the top of this turn, so a settled wait ends on a
+            // fresh answer: by then a session that was going has gone, and nothing is started.
+            if (_worker == 0 && ready && DateTime.UtcNow - endedAt >= backoff)
             {
                 startedAt = DateTime.UtcNow;
                 FollowSession(target);
@@ -244,7 +252,9 @@ internal static class ServiceHost
 
                 if (_worker == 0)
                 {
-                    // Nothing to do but wait and try again; a tight retry would fill the log.
+                    // Nothing to do but wait and try again; a tight retry would fill the log. The
+                    // wait runs from here, since no worker ran to end and set the mark itself.
+                    endedAt = DateTime.UtcNow;
                     backoff = TimeSpan.FromSeconds(Math.Min(maximumBackoff.TotalSeconds,
                                                             Math.Max(2, backoff.TotalSeconds * 2)));
                 }

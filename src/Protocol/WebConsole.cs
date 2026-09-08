@@ -1,4 +1,4 @@
-﻿//  Copyright © AndreyLysikov
+//  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Globalization;
@@ -793,34 +793,7 @@ internal sealed class WebConsole : IAsyncDisposable
             return config.BindAddress;
         }
 
-        // The first real IPv4 of an interface that is up: not a routing-table guess against one
-        // fixed gateway, which named the wrong address on a network that is not 192.168.x.
-        try
-        {
-            foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (adapter.OperationalStatus != OperationalStatus.Up) continue;
-                if (adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-
-                foreach (var ip in adapter.GetIPProperties().UnicastAddresses)
-                {
-                    if (ip.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-
-                    var bytes = ip.Address.GetAddressBytes();
-
-                    // Not an APIPA address (169.254.x): that one means the network is not up yet,
-                    // and printing it sends the next person hunting an address nobody answers on.
-                    if (bytes[0] == 169 && bytes[1] == 254) continue;
-
-                    return ip.Address.ToString();
-                }
-            }
-        }
-        catch (Exception)
-        {
-        }
-
-        return "this machine";
+        return Peer.FirstLocalAddress()?.ToString() ?? "this machine";
     }
 
     // ------------------------------------------------------------------ plumbing

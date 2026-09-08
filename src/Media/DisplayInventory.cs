@@ -41,9 +41,21 @@ internal sealed record GraphicsAdapter(
     internal string Vendor => Dxgi.DescribeVendor(VendorId);
 
     // The adapter description is the one thing an IddCx driver publishes without this server
-    // installing anything of its own — the names VirtualDrivers/Virtual-Display-Driver use.
+    // installing anything of its own. Held as fragments: builds append their own words to it.
+    private static readonly string[] VirtualDisplayNames =
+    [
+        "Virtual Display Driver",     // VirtualDrivers/Virtual-Display-Driver, HDR builds included
+        "IddSampleDriver",            // Microsoft's IddCx sample and the forks that keep its name
+        "Parsec Virtual Display",     // installed with the Parsec host
+        "usbmmidd",                   // Amyuni's, which most virtual-display scripts install
+        "USB Mobile Monitor",         // the same driver under the name Windows shows for it
+        "Virtual Display Adapter",    // Sunshine's fork and others that follow its naming
+    ];
+
+    // Matched loosely on purpose: an exact list goes stale with the next release of any of them,
+    // and a card that is not a virtual display has none of these words in its description.
     internal bool IsVirtualDisplay =>
-        Name is "Virtual Display Driver" or "IddSampleDriver Device HDR";
+        VirtualDisplayNames.Any(known => Name.Contains(known, StringComparison.OrdinalIgnoreCase));
 }
 
 // What a screen says about its own colour, in the units the protocol carries: chromaticities

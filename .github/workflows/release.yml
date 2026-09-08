@@ -1,8 +1,5 @@
 name: Release
 
-# A release is made only when the csproj version is higher than the newest tag and changelog.md
-# has a section for exactly that version. Anything else is pushed without producing one.
-
 on:
   push:
     branches: [main]
@@ -12,14 +9,16 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
   release:
+    needs: test
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v7
         with:
-          # The whole history: the previous version is the newest tag, and the release notes
-          # link to the commits since it.
           fetch-depth: 0
 
       - uses: actions/setup-dotnet@v6
@@ -36,7 +35,6 @@ jobs:
           $version = "$version".Trim()
           Write-Host "Version in the project: $version"
 
-          # The newest tag of the form v0.1 or v1.2.3. None at all means the first release.
           $previous = git tag --list 'v[0-9]*' --sort=-v:refname | Select-Object -First 1
           Write-Host "Newest tag: $(if ($previous) { $previous } else { '(none)' })"
 
@@ -45,7 +43,6 @@ jobs:
             $newer = [version]$version -gt [version]($previous -replace '^v', '')
           }
 
-          # The section is "## 0.1" down to the next "## " or the end of the file.
           $changelog = Get-Content 'changelog.md' -Raw
           $pattern = '(?ms)^##\s+' + [regex]::Escape($version) + '\s*$(.*?)(?=^##\s|\z)'
           $match = [regex]::Match($changelog, $pattern)
@@ -61,7 +58,6 @@ jobs:
             exit 0
           }
 
-          # The notes are the changelog section plus a link to what happened since the last tag.
           $tag = "v$version"
           $link = if ($previous) {
             "${{ github.server_url }}/${{ github.repository }}/compare/$previous...$tag"
@@ -76,11 +72,16 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tag"         >> $env:GITHUB_OUTPUT
 
-      - name: Build
+      - name: Build the server
         if: steps.check.outputs.release == 'true'
         shell: pwsh
-        # The same script a developer runs: the exe, then the installer around it.
-        run: ./build.ps1 -Installer -Version ${{ steps.check.outputs.version }}
+        run: ./build.ps1
+
+      # The tests have already passed in the job above, which is why neither script runs them.
+      - name: Build the installer
+        if: steps.check.outputs.release == 'true'
+        shell: pwsh
+        run: ./installer/installer.ps1 -Version ${{ steps.check.outputs.version }}
 
       - name: Publish the release
         if: steps.check.outputs.release == 'true'

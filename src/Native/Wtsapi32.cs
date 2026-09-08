@@ -31,6 +31,15 @@ internal static class Wtsapi32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool WTSQueryUserToken(uint sessionId, out nint token);
 
+    // Hands one session to the winstation of another — what tscon.exe does. The password is empty,
+    // never null: the RPC stub dereferences it before privileges are looked at and answers 1780.
+    [DllImport("wtsapi32.dll", SetLastError = true, CharSet = CharSet.Unicode,
+               EntryPoint = "WTSConnectSessionW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool WTSConnectSession(uint logonId, uint targetLogonId,
+                                                  [MarshalAs(UnmanagedType.LPWStr)] string password,
+                                                  [MarshalAs(UnmanagedType.Bool)] bool wait);
+
     // WTS_CONNECTSTATE_CLASS. Active is a session somebody is looking at, on the console or over
     // remote desktop; Disconnected is one they left without signing out.
     internal const int WTSActive = 0;

@@ -30,21 +30,21 @@
                  Property="LAUNCHAFTERINSTALL" CheckBoxValue="1"
                  Text="Start the server when the installer finishes" />
 
-        <!-- What presents the client's gamepads to games. Fetched by Prerequisites.ps1, not
-             carried in this package — see DRIVERSWITCH. -->
+        <!-- What presents the client's gamepads to games. Neither this box nor the one below it
+             installs anything: a ticked box opens the driver's own page in the browser. -->
         <Control Id="ViGEmCheckBox" Type="CheckBox" X="20" Y="103" Width="330" Height="15"
                  Property="INSTALLVIGEM" CheckBoxValue="1"
-                 Text="Install the ViGEmBus virtual controller driver" />
+                 Text="Open the ViGEmBus page, for the driver that presents the client's gamepads" />
 
-        <!-- Off by default, and the driver is never fetched: checking this opens its page and turns
-             on [General] VirtualDisplay so the server looks for it once installed. -->
+        <!-- Off to begin with. Ticking it also turns on [General] VirtualDisplay, so the server
+             looks for a virtual display as soon as one has been installed. -->
         <Control Id="VddCheckBox" Type="CheckBox" X="20" Y="119" Width="330" Height="15"
                  Property="INSTALLVDD" CheckBoxValue="1"
                  Text="Open the virtual display driver's page, and use one once it is installed" />
 
-        <Control Id="Note" Type="Text" X="20" Y="137" Width="330" Height="62" Transparent="yes"
+        <Control Id="Note" Type="Text" X="20" Y="141" Width="330" Height="74" Transparent="yes"
                  NoPrefix="yes"
-                 Text="The server lives in the notification area: it has no window of its own, and a shortcut is what starts it the first time. Its tray menu can make it start with Windows from then on. What the server needs and does not carry — the .NET runtime, and the driver above — is fetched or installed when the installer finishes, and only if it is missing or out of date." />
+                 Text="The server lives in the notification area: it has no window of its own, and a shortcut is what starts it the first time. Its tray menu can make it start with Windows from then on.&#10;&#10;The two drivers above are other people's packages: what a ticked box does is open the page, in your browser, when this installer closes. The .NET runtime is not checked for either &#8212; Windows offers to install it at the first start if it is missing." />
 
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 

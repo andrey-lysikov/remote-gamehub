@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!-- The installer: the server alone, into the person's profile (offered first) or Program Files.
-     Built by build.ps1 with the version and publisher from the csproj: wix build -d Version=... -->
+     Nothing is checked before it and nothing is fetched after it. Built by installer.ps1. -->
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
@@ -52,7 +52,6 @@
 
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
-    <StandardDirectory Id="TempFolder" />
 
     <!-- Where the server keeps its configuration either way (AppConfig.FallbackDirectory). Named
          only so the virtual-display checkbox can put one setting there ahead of the first run. -->
@@ -74,6 +73,63 @@
                  After="WixSetDefaultPerMachineFolder"
                  Sequence="both" />
 
+    <!-- Whether the server is already here, and in which of the two places: Windows Installer says
+         a related product exists but never where. Only read once an upgrade has been detected. -->
+    <Property Id="PERMACHINECOPY" Secure="yes">
+      <DirectorySearch Id="PerMachineFolderSearch" Path="[ProgramFiles64Folder]Remote-Gamehub">
+        <FileSearch Id="PerMachineExeSearch" Name="Remote-Gamehub.exe" />
+      </DirectorySearch>
+    </Property>
+
+    <Property Id="PERUSERCOPY" Secure="yes">
+      <DirectorySearch Id="PerUserFolderSearch" Path="[LocalAppDataFolder]Remote-Gamehub">
+        <FileSearch Id="PerUserExeSearch" Name="Remote-Gamehub.exe" />
+      </DirectorySearch>
+    </Property>
+
+    <!-- An upgrade keeps the scope it finds: changed halfway, it leaves two servers on one pair of
+         ports, since neither scope can remove the other. AppSearch at 50 settles this in time. -->
+    <SetProperty Action="SetPerMachineUpgrade" Id="WixAppFolder" Value="WixPerMachineFolder"
+                 After="AppSearch" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND PERMACHINECOPY" />
+
+    <!-- Program Files wins when both are somehow there — the state this rule exists to stop. It is
+         the copy an elevated install can actually replace, and the one nobody can clear by hand. -->
+    <SetProperty Action="SetPerUserUpgrade" Id="WixAppFolder" Value="WixPerUserFolder"
+                 After="AppSearch" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND PERUSERCOPY AND NOT PERMACHINECOPY" />
+
+    <!-- What the scope page would have published: the stock actions at 998 and 999 read ALLUSERS
+         and Privileged and nothing else, while WixAppFolder above only dresses the pages. -->
+    <SetProperty Action="SetAllUsersForUpgrade" Id="ALLUSERS" Value="1"
+                 After="SetPerMachineUpgrade" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND PERMACHINECOPY" />
+
+    <!-- Cleared rather than left at 2, which the stock pair reads as "an administrator, so Program
+         Files": an upgrade of a copy in the profile must stay there whoever runs it. -->
+    <SetProperty Action="ClearAllUsersForUpgrade" Id="ALLUSERS" Value="{}"
+                 After="SetPerUserUpgrade" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND PERUSERCOPY AND NOT PERMACHINECOPY" />
+
+    <!-- A first install goes into the profile too; the stock set would decide Program Files for
+         anybody elevated. A scope named on the command line is left alone. -->
+    <SetProperty Action="ClearAllUsersForFirstInstall" Id="ALLUSERS" Value="{}"
+                 After="ClearAllUsersForUpgrade" Sequence="both"
+                 Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND ALLUSERS=2" />
+
+    <!-- The folder the two above cannot name: Windows Installer knows where it put the component
+         last time, whichever of the two folders — or a third, browsed to — it went into. -->
+    <Property Id="INSTALLEDFOLDER" Secure="yes">
+      <ComponentSearch Id="InstalledServerSearch"
+                       Guid="F7D96560-E799-4DE3-ADDD-C7085743FF44" Type="directory" />
+    </Property>
+
+    <!-- Named outright, so the pair at 998 and 999 stand down: both ask for an empty
+         APPLICATIONFOLDER. When the search finds nothing they carry on off the scope above. -->
+    <SetProperty Action="SetUpgradeFolder" Id="APPLICATIONFOLDER" Value="[INSTALLEDFOLDER]"
+                 After="ClearAllUsersForFirstInstall" Sequence="both"
+                 Condition="WIX_UPGRADE_DETECTED AND INSTALLEDFOLDER" />
+
     <?define ShortcutName = "Remote Game Hub" ?>
     <?define ShortcutNote = "Game and desktop streaming to Moonlight clients" ?>
 
@@ -82,15 +138,6 @@
     <ComponentGroup Id="AppFiles" Directory="APPLICATIONFOLDER">
       <Component Id="MainExe" Guid="F7D96560-E799-4DE3-ADDD-C7085743FF44">
         <File Id="RemoteGameHubExe" Source="$(Exe)" Name="Remote-Gamehub.exe" KeyPath="yes" />
-      </Component>
-    </ComponentGroup>
-
-    <!-- The script that fetches what this package does not carry (the .NET runtime, ViGEmBus) on
-         the installing machine. Put in the temporary folder, not beside the exe; it deletes itself. -->
-    <ComponentGroup Id="PrerequisiteFiles" Directory="TempFolder">
-      <Component Id="PrerequisiteScript" Guid="3C2B9A61-8E4F-4D7A-9B1C-5F0E2D6A7B84">
-        <File Id="PrerequisitesPs1" Source="$(Prerequisites)" Name="Prerequisites.ps1"
-              KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -155,12 +202,12 @@
     <Property Id="INSTALLSTARTMENUSHORTCUT" Value="1" />
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
 
-    <!-- The client's pads are what most people stream games for, so on by default. The driver is
-         machine-wide and shared with other programs, so it is left in place at uninstall. -->
+    <!-- Ticked to begin with: the client's pads are what most people stream games for. Neither
+         driver is installed from here — a ticked box opens the page it is published on. -->
     <Property Id="INSTALLVIGEM" Value="1" />
 
-    <!-- Off by default: unlike the drivers above, this package does not fetch this one, and asking
-         for it without saying so would be the wrong default. -->
+    <!-- Off to begin with: a virtual display is a thing to go looking for rather than something
+         most people want, and ticking it also turns the setting on in the configuration file. -->
     <Property Id="INSTALLVDD" Value="0" />
 
     <Feature Id="Main"
@@ -170,7 +217,6 @@
              AllowAbsent="no"
              ConfigurableDirectory="APPLICATIONFOLDER">
       <ComponentGroupRef Id="AppFiles" />
-      <ComponentGroupRef Id="PrerequisiteFiles" />
 
       <Feature Id="StartMenu" Title="Start menu shortcut"
                Description="A shortcut in the Start menu." Level="1">
@@ -191,18 +237,6 @@
       </Feature>
 
     </Feature>
-
-    <!-- Run after this install, not inside it: both setups it may reach for are msi packages of
-         their own. Its outcome is ignored — a driver that would not go in is a stream without pads. -->
-    <CustomAction Id="InstallPrerequisites"
-                  Directory="TempFolder"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[TempFolder]Prerequisites.ps1&quot; [DRIVERSWITCH]"
-                  Return="ignore" />
-
-    <!-- The checkbox travels to the script as its one switch: fetch ViGEmBus only when it is
-         still checked. -->
-    <SetProperty Id="DRIVERSWITCH" Value="-NoDriver" Before="InstallPrerequisites"
-                 Sequence="execute" Condition="INSTALLVIGEM &lt;&gt; 1" />
 
     <!-- Removes the service the server makes for itself (App/ServiceControl.cs), which is also
          what frees the exe: the service and its SYSTEM worker have no window a close could reach. -->
@@ -233,13 +267,13 @@
                   Return="ignore" />
 
     <InstallExecuteSequence>
-      <!-- On an install and on an upgrade, which is where a runtime that has moved on since the
-           last one is noticed; never on the way out. -->
-      <Custom Action="InstallPrerequisites" After="InstallFinalize" Condition="NOT Installed" />
       <!-- Before RemoveFiles, on uninstall and on the removal half of an upgrade. Losing the service
            in an upgrade costs nothing: the new server makes it again at its first start. -->
       <Custom Action="RemoveService" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
-      <Custom Action="RemoveAutostartTask" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+      <!-- On a real uninstall only: an upgrade removes the older version with REMOVE=ALL as well, and
+           UPGRADINGPRODUCTCODE is set on exactly that removal and on no other. -->
+      <Custom Action="RemoveAutostartTask" Before="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
 
     <!-- The advanced set is the one that asks whom the install is for, and brings the folder page
@@ -254,8 +288,12 @@
     <CustomAction Id="SetAppTarget" Property="WixShellExecTarget" Value="[#RemoteGameHubExe]" />
     <CustomAction Id="LaunchApplication" DllEntry="WixShellExec" BinaryRef="Wix4UtilCA_X64" Impersonate="yes" />
 
-    <!-- All the virtual-display checkbox fetches: the driver's own page, in the person's browser,
-         so they install it or not on their own terms. This package installs none of it. -->
+    <!-- All either driver checkbox does: the driver's own page, opened through the shell as the
+         person installing, so it lands in the browser they are already signed into. -->
+    <CustomAction Id="SetViGEmTarget" Property="WixShellExecTarget"
+                  Value="https://github.com/nefarius/ViGEmBus/releases/latest" />
+    <CustomAction Id="OpenViGEmPage" DllEntry="WixShellExec" BinaryRef="Wix4UtilCA_X64" Impersonate="yes" />
+
     <CustomAction Id="SetVddTarget" Property="WixShellExecTarget"
                   Value="https://github.com/VirtualDrivers/Virtual-Display-Driver/releases" />
     <CustomAction Id="OpenVddPage" DllEntry="WixShellExec" BinaryRef="Wix4UtilCA_X64" Impersonate="yes" />
@@ -270,6 +308,14 @@
 
       <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ShortcutsDlg" Order="10" />
       <Publish Dialog="ShortcutsDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+
+      <!-- On an upgrade neither the scope nor the folder is a question, so "Advanced" passes both
+           pages. The stock jumps out of the first page are ordered one to three. -->
+      <Publish Dialog="AdvancedWelcomeEulaDlg" Control="Advanced" Event="NewDialog"
+               Value="ShortcutsDlg" Condition="WIX_UPGRADE_DETECTED" Order="20" />
+
+      <Publish Dialog="ShortcutsDlg" Control="Back" Event="NewDialog"
+               Value="AdvancedWelcomeEulaDlg" Condition="WIX_UPGRADE_DETECTED" Order="10" />
       <Publish Dialog="ShortcutsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
 
       <!-- The way back is claimed only while installing: during maintenance the last page returns
@@ -284,10 +330,17 @@
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication"
                Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed" Order="2" />
 
+      <!-- One page per ticked box, each set and then opened. They share WixShellExecTarget, so
+           the order matters: the pair for a page has to run before the pair for the next one. -->
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="SetViGEmTarget"
+               Condition="INSTALLVIGEM = 1 AND NOT Installed" Order="3" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenViGEmPage"
+               Condition="INSTALLVIGEM = 1 AND NOT Installed" Order="4" />
+
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="SetVddTarget"
-               Condition="INSTALLVDD = 1 AND NOT Installed" Order="3" />
+               Condition="INSTALLVDD = 1 AND NOT Installed" Order="5" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenVddPage"
-               Condition="INSTALLVDD = 1 AND NOT Installed" Order="4" />
+               Condition="INSTALLVDD = 1 AND NOT Installed" Order="6" />
     </UI>
   </Package>
 </Wix>

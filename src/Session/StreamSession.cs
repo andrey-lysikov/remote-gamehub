@@ -1,4 +1,4 @@
-﻿//  Copyright © AndreyLysikov
+//  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Diagnostics;
@@ -92,11 +92,6 @@ internal sealed class SessionManager : IDisposable
     {
         refusal = string.Empty;
 
-        // A remote desktop session is not refused: duplication does work there. If the capture or
-        // the encoder cannot, they say so where they fail.
-        if (_sessionWatch.IsRemote)
-            Log.Event("this launch is from a remote desktop session; the picture is that session's");
-
         if (!_encoder.CanStream)
         {
             refusal = _encoder.Refusal ?? "no encoder is available.";
@@ -114,10 +109,14 @@ internal sealed class SessionManager : IDisposable
             _pending = request;
         }
 
+        // Before anything arranged for the picture: until this there is none, and the mode set
+        // below would go to the remote display rather than to the screen that ends up streamed.
+        var taken = _sessionWatch.IsRemote && _sessionWatch.ReclaimConsole() ? WaitForScreen() : null;
+
         // Before the game, not after: a game reads the default playback device when it starts, and
         // one started on the old device would keep it for as long as it runs.
         MoveTheSound(request.AudioChannels);
-        AdaptTheScreen(request);
+        AdaptTheScreen(request, taken ?? _output);
 
         if (request.AppId != AppParameters.Protocol.DesktopAppId && !StartApplication(request.AppId))
         {
@@ -212,12 +211,41 @@ internal sealed class SessionManager : IDisposable
         }
     }
 
+    // Waits for the card to light an output after the console was taken back, and answers with it.
+    // Here at the launch, which a client allows the time to start a game, not at the strict ANNOUNCE.
+    private DisplayOutput? WaitForScreen()
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(AppParameters.Handover.ScreenMs);
+
+        while (true)
+        {
+            var screen = DisplayInventory.Select(DisplayInventory.Enumerate(), _config.Output,
+                                                 _config.VirtualDisplay, out var reason);
+            if (screen is not null)
+            {
+                Log.Info($"the console is back and its screen is up: {screen.Label} " +
+                         $"\"{screen.DeviceName}\" ({reason})");
+                return screen;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                Log.Warn("no screen appeared in the " +
+                         $"{AppParameters.Handover.ScreenMs / 1000} s after the console was taken " +
+                         $"back ({reason}). The stream is likely to be refused for want of one.");
+                return null;
+            }
+
+            Thread.Sleep(AppParameters.Handover.PollMs);
+        }
+    }
+
     // Checked again rather than trusted: an index valid at startup can throw
     // DXGI_ERROR_NOT_FOUND later, so this retries a few times before refusing the stream.
     private DisplayOutput? ResolveOutput()
     {
-        // Mirrors the handful of quick tries over ~2s OpenCaptureAfterModeChange gives an
-        // ordinary mode change: a remote session's own screen is not always there instantly.
+        // The handful of quick tries over ~2s OpenCaptureAfterModeChange gives a mode change. A
+        // console handover is waited for at the launch instead: this runs on the RTSP thread.
         const int attempts = 10;
         string reason = string.Empty;
 
@@ -245,7 +273,11 @@ internal sealed class SessionManager : IDisposable
             if (attempt < attempts) Thread.Sleep(AppParameters.Capture.RecreateDelayMs);
         }
 
-        Log.Warn($"the stream is refused: the screen this server captures is gone ({reason}).");
+        Log.Warn($"the stream is refused: the screen this server captures is gone ({reason})" +
+                 (_sessionWatch.IsRemote
+                     ? ". This session is still on remote desktop, which has no screen to capture; " +
+                       "the console was not taken back."
+                     : "."));
         return null;
     }
 
@@ -275,8 +307,12 @@ internal sealed class SessionManager : IDisposable
             _pending = request;
         }
 
+        // As at a launch: a client returning to a running game needs a screen as much as one
+        // starting it, and the session may have gone to remote desktop while the game ran.
+        var taken = _sessionWatch.IsRemote && _sessionWatch.ReclaimConsole() ? WaitForScreen() : null;
+
         MoveTheSound(request.AudioChannels);
-        AdaptTheScreen(request);
+        AdaptTheScreen(request, taken ?? _output);
 
         Log.Info("resume accepted; waiting for the client to negotiate the stream");
         return true;
@@ -370,9 +406,9 @@ internal sealed class SessionManager : IDisposable
         lock (_gate) _audio = adaptation;
     }
 
-    // Puts the screen where the client's mode and HDR ask, before StartApplication for the same
-    // reason MoveTheSound goes first. A client too old to send them leaves this a no-op.
-    private void AdaptTheScreen(LaunchRequest request)
+    // Puts the screen where the client's mode and HDR ask, before StartApplication. Passed in
+    // rather than taken from the field: after the console is handed back, that one has gone.
+    private void AdaptTheScreen(LaunchRequest request, DisplayOutput screen)
     {
         DisplayAdaptation? previous;
         lock (_gate)
@@ -388,7 +424,7 @@ internal sealed class SessionManager : IDisposable
         var desktop = request.AppId == AppParameters.Protocol.DesktopAppId;
         var wantHdr = request.HdrRequested && _encoder.AnyHdr;
 
-        var adaptation = DisplayAdaptation.Apply(_output, request.Width, request.Height, request.Fps,
+        var adaptation = DisplayAdaptation.Apply(screen, request.Width, request.Height, request.Fps,
             wantHdr, _encoder.AnyHdr, _config.Adapt, scaleForClient: desktop && _config.ScaleDesktop,
             isGame: !desktop);
 

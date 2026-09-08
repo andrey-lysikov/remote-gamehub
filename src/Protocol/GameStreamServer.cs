@@ -1,4 +1,4 @@
-﻿//  Copyright © AndreyLysikov
+//  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Diagnostics;
@@ -175,7 +175,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
                 using var patience = pairing ? MeasurePatience(client, gone) : null;
                 using var cancel = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token, gone.Token);
 
-                var answer = await RouteAsync(request, known, cancel.Token);
+                var answer = await RouteAsync(request, known, client.Client.LocalEndPoint,
+                                              cancel.Token);
                 if (answer is null)
                 {
                     await HttpResponse.WriteNotFoundAsync(stream, _stopping.Token);
@@ -293,13 +294,14 @@ internal sealed class GameStreamServer : IAsyncDisposable
     }
 
     private async Task<string?> RouteAsync(HttpRequest request, KnownClient? known,
+                                           EndPoint? reachedAt,
                                            CancellationToken cancel) => request.Path switch
     {
-        "/serverinfo" => ServerInfo(known),
+        "/serverinfo" => ServerInfo(known, reachedAt),
         "/applist" => AppList(),
         "/pair" => await _pairing.HandleAsync(request, cancel),
-        "/launch" => Launch(request),
-        "/resume" => Resume(request),
+        "/launch" => Launch(request, reachedAt),
+        "/resume" => Resume(request, reachedAt),
         "/cancel" => Cancel(),
         _ => null,
     };
@@ -309,7 +311,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     // What the client reads to decide whether this machine is worth listing, what it can decode
     // from it, and whether it is free. Everything else the client does starts from here.
-    private string ServerInfo(KnownClient? known) => BuildDocument(xml =>
+    private string ServerInfo(KnownClient? known, EndPoint? reachedAt) => BuildDocument(xml =>
     {
         xml.WriteElementString("hostname", _identity.HostName);
         xml.WriteElementString("appversion", AppParameters.Protocol.AppVersion);
@@ -318,7 +320,9 @@ internal sealed class GameStreamServer : IAsyncDisposable
         xml.WriteElementString("HttpsPort", _config.HttpsPort.ToString());
         xml.WriteElementString("ExternalPort", _config.HttpPort.ToString());
         xml.WriteElementString("mac", MacAddress());
-        xml.WriteElementString("LocalIP", LocalAddress());
+        // The address this very client reached, not a guess: a client builds its RTSP URL out of
+        // this, and one told 0.0.0.0 negotiates against nothing.
+        xml.WriteElementString("LocalIP", Peer.ThisMachine(reachedAt));
 
         // From the startup probe: what the card's encoder actually opened. The H.264 bit stays on
         // whatever the probe said — clients treat it as the floor — and the launch still refuses.
@@ -510,7 +514,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     // Starts a session. The client sends the key its input and control messages are encrypted
     // with, what it wants to run, and a picture shape — the picture is agreed later over RTSP.
-    private string Launch(HttpRequest request)
+    private string Launch(HttpRequest request, EndPoint? reachedAt)
     {
         var launch = ReadLaunchRequest(request);
         if (launch is null)
@@ -522,7 +526,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
         return BuildDocument(xml =>
         {
-            xml.WriteElementString("sessionUrl0", SessionUrl());
+            xml.WriteElementString("sessionUrl0", SessionUrl(reachedAt));
             xml.WriteElementString("gamesession", "1");
         });
     }
@@ -598,8 +602,10 @@ internal sealed class GameStreamServer : IAsyncDisposable
         return (0, 0, 0);
     }
 
-    private string SessionUrl() =>
-        $"rtsp://{LocalAddress()}:{_config.RtspPort.ToString(CultureInfo.InvariantCulture)}";
+    // Where the client is to negotiate the stream. Built from the address it reached this server
+    // on: it dials whatever goes here, and 0.0.0.0 is a stream that never starts.
+    private string SessionUrl(EndPoint? reachedAt) =>
+        $"rtsp://{Peer.ThisMachine(reachedAt)}:{_config.RtspPort.ToString(CultureInfo.InvariantCulture)}";
 
     // A refusal a client will show rather than swallow. The gamesession element is what
     // tells it no session was created; without it a client waits for a stream that is not coming.
@@ -611,7 +617,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     // Reattaches to a session already running. This server reports a running application only
     // while it is actually streaming, so this is asked when a client's own stream dropped.
-    private string Resume(HttpRequest request)
+    private string Resume(HttpRequest request, EndPoint? reachedAt)
     {
         var resume = ReadLaunchRequest(request);
         if (resume is null)
@@ -635,7 +641,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
         return BuildDocument(xml =>
         {
-            xml.WriteElementString("sessionUrl0", SessionUrl());
+            xml.WriteElementString("sessionUrl0", SessionUrl(reachedAt));
             xml.WriteElementString("resume", "1");
         });
     }
@@ -673,22 +679,6 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     // The address of the interface that would actually carry the stream, from the routing table:
     // on a machine with a virtual switch or a VPN, the first interface is rarely the right one.
-    private static string LocalAddress()
-    {
-        try
-        {
-            using var probe = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
-            // Nothing is sent: connecting a datagram socket only picks a route.
-            probe.Connect("192.168.1.1", 9);
-            return (probe.LocalEndPoint as IPEndPoint)?.Address.ToString() ?? "0.0.0.0";
-        }
-        catch (Exception)
-        {
-            return "0.0.0.0";
-        }
-    }
-
     private static string MacAddress()
     {
         var chosen = NetworkInterface.GetAllNetworkInterfaces()

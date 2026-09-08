@@ -1,0 +1,16 @@
+# One line ending everywhere. The sources are edited on Windows and the exe is also built on macOS
+# and Linux through build.sh; a repository that mixes the two shows whole files as changed when
+# nobody has touched them.
+* text=auto eol=lf
+
+# Whatever a checkout is told elsewhere, these keep LF: a carriage return in a shell script breaks
+# bash, and it breaks it with an error that names the wrong line.
+*.sh text eol=lf
+
+# Left byte for byte. Git must not go looking for line endings inside any of these.
+*.png binary
+*.jpg binary
+*.ico binary
+*.rtf binary
+*.msi binary
+*.exe binary
