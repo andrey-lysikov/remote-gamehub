@@ -4,7 +4,10 @@
 
 * If uPNP enabled, we can ban ips if it ddos.
 * Now we watch if power mode changed
-* Status web page and css moved from code to statui files
+* Status web page and css moved from code to statui 
+* Update game launcher start commands
+* Reset game preferences from status page
+* Update check from status page
 * Bugfix
 
 ## 1.4
