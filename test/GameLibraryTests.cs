@@ -51,6 +51,53 @@ public class GameLibraryTests
         Assert.Equal(new[] { "Alpha", "Beta" }, library.List().Select(g => g.Title));
     }
 
+    [Theory]
+    [InlineData(@"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\cs2.exe", "Steam")]
+    [InlineData(@"d:/steamlibrary/steamapps/common/counter-strike global offensive/game/bin/cs2.exe", "Steam")]
+    [InlineData(@"""D:\Games\Diablo IV\Diablo IV.exe"" -launch", "Battle.net")]
+    [InlineData(@"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive Tools\x.exe", null)]
+    [InlineData(@"D:\Games\Other\other.exe", null)]
+    [InlineData("steam://rungameid/730", null)]
+    public void A_folder_find_inside_a_store_game_folder_gives_way_to_the_store(string command, string? store)
+    {
+        var storeFolders = new[]
+        {
+            (@"D:\STEAMLIBRARY\STEAMAPPS\COMMON\COUNTER-STRIKE GLOBAL OFFENSIVE", "Steam"),
+            (@"D:\GAMES\DIABLO IV", "Battle.net"),
+        };
+
+        var found = new ScannedGame("folder", null, "whatever", command, null, null);
+        Assert.Equal(store, GameLibrary.InStoreFolder(found, storeFolders));
+    }
+
+    [Fact]
+    public void A_store_starting_folder_is_kept_until_somebody_names_another_install_folder()
+    {
+        using var folder = new TestFolder();
+        using var database = Database.Open(folder.Path);
+        var library = new GameLibrary(database);
+
+        var games = Path.Combine(folder.Path, "games");
+        folder.File(@"games\Alpha\alpha.exe");
+        library.Rescan(FoldersOnly(games));
+
+        var row = library.Details().Single();
+        using (var set = database.Command("UPDATE games SET working_dir = 'D:\\DOSBOX' WHERE id = $id;"))
+        {
+            set.Parameters.AddWithValue("$id", row.Id);
+            set.ExecuteNonQuery();
+        }
+
+        Assert.Equal(@"D:\DOSBOX", library.Target(row.Id)!.WorkingDirectory);
+
+        // A new name keeps the store's folders; a new install folder drops the starting one.
+        library.Save(row.Id, "Alpha!", row.LaunchCommand, row.InstallPath);
+        Assert.Equal(@"D:\DOSBOX", library.Target(row.Id)!.WorkingDirectory);
+
+        library.Save(row.Id, "Alpha!", row.LaunchCommand, Path.Combine(games, "elsewhere"));
+        Assert.Null(library.Target(row.Id)!.WorkingDirectory);
+    }
+
     [Fact]
     public void What_was_typed_on_the_page_outlives_the_scan()
     {

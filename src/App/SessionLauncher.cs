@@ -92,6 +92,29 @@ internal static class SessionLauncher
 
     // Starts something as the person signed in, through the shell so a URL, a .conf or a shell:
     // path resolves as a double-click would. Only reached when the server itself runs as SYSTEM.
+    // A launch command as what to start and what to hand it: "C:\...\Battle.net.exe"
+    // --exec="launch Pro" splits after the closing quote. Unquoted, a path with spaces cannot be
+    // told from a path with arguments, except at ".exe " — which is where GOG's DOSBox games
+    // put theirs. Anything else is a single path or address.
+    internal static (string File, string Arguments) SplitCommand(string command)
+    {
+        var text = command.Trim();
+
+        if (text.StartsWith('"'))
+        {
+            var close = text.IndexOf('"', 1);
+            if (close > 1) return (text[1..close], text[(close + 1)..].Trim());
+        }
+        else if (!text.Contains("://", StringComparison.Ordinal) &&
+                 !text.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+        {
+            var exe = text.IndexOf(".exe ", StringComparison.OrdinalIgnoreCase);
+            if (exe > 0) return (text[..(exe + 4)], text[(exe + 5)..].Trim());
+        }
+
+        return (text, string.Empty);
+    }
+
     internal static bool StartAsConsoleUser(string command, string? workingDirectory)
     {
         EnablePrivileges();
@@ -116,7 +139,9 @@ internal static class SessionLauncher
         {
             // Through cmd's start, which is ShellExecute: the only way a URL or a shell: path runs.
             // The empty first quotes are start's title argument, insisted on when a path is quoted.
-            var line = new StringBuilder($"cmd.exe /c start \"\" \"{command}\"");
+            var (file, arguments) = SplitCommand(command);
+            var line = new StringBuilder($"cmd.exe /c start \"\" \"{file}\"" +
+                                         (arguments.Length > 0 ? " " + arguments : string.Empty));
             var process = StartWith(userToken, null, line, workingDirectory,
                                     Advapi32.CREATE_UNICODE_ENVIRONMENT | Advapi32.CREATE_NO_WINDOW,
                                     $"\"{command}\" as the signed-in user");

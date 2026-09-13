@@ -204,6 +204,17 @@ internal sealed class Database : IDisposable
             version = 11;
         }
 
+        if (version < 12)
+        {
+            // The folder a game is started from, when its store names one apart from where it is
+            // installed: GOG's DOSBox games start in their DOSBOX folder, and their arguments
+            // name the configuration files from there. Null means the install folder.
+            Execute(_connection, "ALTER TABLE games ADD COLUMN working_dir TEXT;");
+
+            Execute(_connection, "PRAGMA user_version = 12;");
+            version = 12;
+        }
+
         Log.Info(from == version
             ? $"database {Path}, schema version {version}"
             : $"database {Path}, schema migrated from version {from} to {version}");

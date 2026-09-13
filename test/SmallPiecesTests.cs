@@ -3,6 +3,7 @@
 
 using System.Net;
 using RemoteGameHub.App;
+using RemoteGameHub.Library;
 using RemoteGameHub.Media;
 using RemoteGameHub.Protocol;
 using Xunit;
@@ -47,6 +48,111 @@ public class SmallPiecesTests
     public void A_newer_version_is_compared_as_numbers(string latest, string current, bool newer)
     {
         Assert.Equal(newer, UpdateChecker.IsNewer(latest, current));
+    }
+
+    [Theory]
+    [InlineData("steam://rungameid/10", "steam://rungameid/10", "")]
+    [InlineData(@"C:\Games\My Game\game.exe", @"C:\Games\My Game\game.exe", "")]
+    [InlineData(@"""C:\Games\My Game\game.exe""", @"C:\Games\My Game\game.exe", "")]
+    [InlineData(@"""C:\Battle.net\Battle.net.exe"" --exec=""launch Pro""",
+                @"C:\Battle.net\Battle.net.exe", @"--exec=""launch Pro""")]
+    [InlineData(@"C:\GOG Games\Doom\DOSBOX\dosbox.exe -conf ""..\dosbox.conf"" -noconsole",
+                @"C:\GOG Games\Doom\DOSBOX\dosbox.exe", @"-conf ""..\dosbox.conf"" -noconsole")]
+    [InlineData(@"shell:AppsFolder\Game.exe App!App", @"shell:AppsFolder\Game.exe App!App", "")]
+    public void A_launch_command_is_split_only_after_a_quoted_path(string command, string file,
+                                                                   string arguments)
+    {
+        Assert.Equal((file, arguments), SessionLauncher.SplitCommand(command));
+    }
+
+    [Theory]
+    [InlineData(@"""Blizzard Uninstaller.exe"" --lang=enUS --uid=wow_enus", "wow")]
+    [InlineData(@"""Blizzard Uninstaller.exe"" --lang=enUS --uid=hs_beta", "hs_beta")]
+    [InlineData(@"""Blizzard Uninstaller.exe"" --uid=fenris --displayname=""Diablo IV""", "fenris")]
+    [InlineData(@"""Blizzard Uninstaller.exe"" --lang=enUS", null)]
+    public void A_battle_net_uid_loses_only_a_language_suffix(string command, string? uid)
+    {
+        Assert.Equal(uid, LauncherScanners.UidFrom(command));
+    }
+
+    [Fact]
+    public void A_battle_net_game_is_started_by_its_product_code_not_its_page()
+    {
+        Assert.Equal(@"""C:\Battle.net\Battle.net.exe"" --exec=""launch Fen""",
+                     LauncherScanners.BattleNetLaunch(@"C:\Battle.net\Battle.net.exe", "Fen", "fenris"));
+
+        // Without the launcher or the code, the page is what there is.
+        Assert.Equal("battlenet://fenris",
+                     LauncherScanners.BattleNetLaunch(@"C:\Battle.net\Battle.net.exe", null, "fenris"));
+        Assert.Equal("battlenet://fenris", LauncherScanners.BattleNetLaunch(null, "Fen", "fenris"));
+    }
+
+    [Fact]
+    public void Battle_net_product_codes_are_read_from_its_own_product_db()
+    {
+        // Two installs as the agent writes them, with a number field in between that is not ours.
+        var data = Field(1, Concat(Text(1, "fenris"), Text(2, "Fen"),
+                                   Field(3, Text(1, "D:/Games/Diablo IV")), new byte[] { 0x20, 0x01 }))
+            .Concat(Field(1, Concat(Text(1, "wow_enus"), Text(2, "wow"))))
+            .Concat(Field(1, Text(1, "agent")))
+            .ToArray();
+
+        var products = LauncherScanners.ReadProductDb(data);
+
+        Assert.Equal(2, products.Count);
+        Assert.Equal(new LauncherScanners.BattleNetProduct("fenris", "Fen", "D:/Games/Diablo IV"),
+                     products[0]);
+
+        // By folder, whatever the slashes; by uid without its language otherwise.
+        Assert.Equal("Fen", LauncherScanners.ProductFor(products, "other", @"D:\Games\Diablo IV\")?.Code);
+        Assert.Equal("wow", LauncherScanners.ProductFor(products, "wow", null)?.Code);
+        Assert.Null(LauncherScanners.ProductFor(products, "prometheus", @"C:\Overwatch"));
+
+        // Not a protocol buffer at all: nothing, rather than an exception.
+        Assert.Empty(LauncherScanners.ReadProductDb(new byte[] { 0x0A, 0xFF, 0xFF }));
+
+        static byte[] Text(int field, string text) => Field(field, System.Text.Encoding.UTF8.GetBytes(text));
+        static byte[] Field(int field, byte[] value) =>
+            new[] { (byte)(field << 3 | 2), (byte)value.Length }.Concat(value).ToArray();
+        static byte[] Concat(params byte[][] parts) => parts.SelectMany(part => part).ToArray();
+    }
+
+    [Fact]
+    public void Ea_offer_identifiers_are_read_from_the_installer_manifest()
+    {
+        const string manifest = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <DiPManifest version="4.0">
+              <gameTitles><gameTitle locale="en_US">Battlefield 1</gameTitle></gameTitles>
+              <contentIDs><contentID>1026023</contentID><contentID> 1026480 </contentID><contentID>1026023</contentID></contentIDs>
+            </DiPManifest>
+            """;
+
+        Assert.Equal(new[] { "1026023", "1026480" }, LauncherScanners.EaOffersFrom(manifest));
+        Assert.Empty(LauncherScanners.EaOffersFrom("not xml"));
+    }
+
+    [Theory]
+    [InlineData("Microsoft.ForzaHorizon6_1.2.3.0_x64__8wekyb3d8bbwe", "Microsoft.ForzaHorizon6",
+                "Microsoft.ForzaHorizon6_8wekyb3d8bbwe")]
+    [InlineData("Microsoft.ForzaHorizon6Demo_1.0.0.0_x64__8wekyb3d8bbwe", "Microsoft.ForzaHorizon6", null)]
+    [InlineData("Microsoft.ForzaHorizon6_1.2.3.0_x64__", "Microsoft.ForzaHorizon6", null)]
+    public void An_xbox_family_name_is_the_identity_and_the_publisher_hash(string fullName,
+                                                                           string identity,
+                                                                           string? family)
+    {
+        Assert.Equal(family, RemoteGameHub.Library.XboxScanner.FamilyNameOf(fullName, identity));
+    }
+
+    [Fact]
+    public void An_xbox_family_name_can_be_computed_from_the_publisher()
+    {
+        // Every Microsoft package's family name ends in this hash; it is the known answer.
+        Assert.Equal("Microsoft.ForzaHorizon6_8wekyb3d8bbwe",
+            RemoteGameHub.Library.XboxScanner.FamilyNameFromPublisher("Microsoft.ForzaHorizon6",
+                "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"));
+
+        Assert.Null(RemoteGameHub.Library.XboxScanner.FamilyNameFromPublisher("Game", null));
     }
 
     [Fact]

@@ -774,6 +774,7 @@ internal sealed class WebConsole : IAsyncDisposable
         // The address a person types is the one bound to, when there is one: no guessing which of
         // several the client will reach.
         if (!string.IsNullOrWhiteSpace(config.BindAddress) &&
+            !string.Equals(config.BindAddress, "any", StringComparison.OrdinalIgnoreCase) &&
             config.BindAddress != IPAddress.Any.ToString())
         {
             return config.BindAddress;

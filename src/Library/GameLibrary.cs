@@ -13,7 +13,9 @@ internal sealed record ScannedGame(
     string Title,
     string LaunchCommand,
     string? InstallPath,
-    string? BoxArtPath);
+    string? BoxArtPath,
+    // Where the game is started from, when that is not InstallPath.
+    string? WorkingDirectory = null);
 
 // One game as /applist needs it.
 internal sealed record ListedGame(long Id, string Title);
@@ -23,7 +25,8 @@ internal sealed record ArtworkCandidate(long Id, string Source, string? External
 
 // Everything needed to start one game and to recognise it afterwards.
 internal sealed record LaunchTarget(string Command, string? InstallPath, string Title,
-                                    bool Pointer, StreamQuality Quality, bool ShowCard);
+                                    bool Pointer, StreamQuality Quality, bool ShowCard,
+                                    string? WorkingDirectory = null);
 
 // The games this machine has, as of the last scan: once at every start, after preflight, and again
 // only when somebody asks for it. Between scans the database is truth.
@@ -77,6 +80,12 @@ internal sealed class GameLibrary
         // without this they carry no current stamp and the sweep would decide they had gone.
         var manualSeen = new HashSet<long>();
 
+        // Where the stores installed their games, with the store that did. A title is not enough
+        // to tell a folder's find from a store's: the folder is named "Counter-Strike Global
+        // Offensive" and the game "Counter-Strike 2", and the executable found in it starts the
+        // game without its store — or starts the store's launcher instead of the game.
+        var storeFolders = new List<(string Folder, string Store)>();
+
         foreach (var (name, enabled, scan) in sources)
         {
             if (!enabled) continue;
@@ -88,6 +97,22 @@ internal sealed class GameLibrary
             {
                 scanned++;
                 var key = TitleKey(game.Title);
+
+                if (game.Source == "folder" && InStoreFolder(game, storeFolders) is { } store)
+                {
+                    Log.Info($"    \"{game.Title}\" was found in a folder {store} installed a game " +
+                             $"into, and is kept as {store} found it");
+                    continue;
+                }
+
+                // Never a folder the person named in [Games] Folders, or one above it: a store
+                // reporting a whole library as one game's folder would hide every game in it.
+                if (game.Source != "folder" && FolderKey(game.InstallPath) is { } installed &&
+                    !config.GamesFolders.Any(named => FolderKey(named) is { } root &&
+                        (root == installed || root.StartsWith(installed + "\\", StringComparison.Ordinal))))
+                {
+                    storeFolders.Add((installed, name));
+                }
 
                 if (claimed.TryGetValue(key, out var owner))
                 {
@@ -200,6 +225,33 @@ internal sealed class GameLibrary
             Log.Info($"    [{game.Source}] {game.Title}\n        {game.LaunchCommand}");
     }
 
+    // The store whose game folder holds what a folder scan would start, or null. The file is what
+    // is compared, not the folder the scan named it after: a scanned "D:\Games\Blizzard" that
+    // picked Diablo IV's executable is Diablo IV's folder all the same.
+    internal static string? InStoreFolder(ScannedGame game, IReadOnlyList<(string Folder, string Store)> storeFolders)
+    {
+        if (FolderKey(SessionLauncher.SplitCommand(game.LaunchCommand).File) is not { } file) return null;
+
+        foreach (var (folder, store) in storeFolders)
+        {
+            if (file.StartsWith(folder + "\\", StringComparison.Ordinal)) return store;
+        }
+
+        return null;
+    }
+
+    // A path in one spelling: back slashes, no trailing one, upper case as Windows compares them.
+    // Null for anything that is not a rooted path — an address, a shell: name, nothing.
+    private static string? FolderKey(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+
+        var text = path.Trim().Replace('/', '\\').TrimEnd('\\');
+        var rooted = text.Length > 2 && (text[1] == ':' || text.StartsWith(@"\\", StringComparison.Ordinal));
+
+        return rooted ? text.ToUpperInvariant() : null;
+    }
+
     // What counts as the same game when two sources both offer one: a trailing version clause in
     // either language is dropped, then all that is not a letter or a digit. Blunt on purpose.
     private static string TitleKey(string title)
@@ -217,11 +269,32 @@ internal sealed class GameLibrary
 
     private void Upsert(ScannedGame game, string stamp)
     {
+        // A row is keyed by its command, so a scanner that learns a better one for the same game
+        // (Battle.net's launcher address giving way to the command that starts the game) would
+        // otherwise leave the old row to be swept as gone, and its edits and cover with it. The
+        // store's own identifier says it is the same game: the row takes the new command.
+        if (game.ExternalId is not null)
+        {
+            using var rebind = _database.Command(
+                """
+                UPDATE games SET launch_command = $launch
+                WHERE id = (SELECT MIN(id) FROM games
+                            WHERE source = $source AND external_id = $external AND manual = 0
+                              AND launch_command <> $launch)
+                  AND NOT EXISTS (SELECT 1 FROM games WHERE source = $source AND launch_command = $launch);
+                """);
+
+            rebind.Parameters.AddWithValue("$source", game.Source);
+            rebind.Parameters.AddWithValue("$external", game.ExternalId);
+            rebind.Parameters.AddWithValue("$launch", game.LaunchCommand);
+            rebind.ExecuteNonQuery();
+        }
+
         using var command = _database.Command(
             """
             INSERT INTO games (source, external_id, title, launch_command,
-                               install_path, box_art_path, first_seen_at, last_seen_at)
-            VALUES ($source, $external, $title, $launch, $install, $art, $stamp, $stamp)
+                               install_path, working_dir, box_art_path, first_seen_at, last_seen_at)
+            VALUES ($source, $external, $title, $launch, $install, $working, $art, $stamp, $stamp)
             ON CONFLICT (source, launch_command) DO UPDATE SET
                 external_id  = excluded.external_id,
                 -- What somebody typed outlives what a scanner reads. An edit is a statement that
@@ -230,6 +303,8 @@ internal sealed class GameLibrary
                 title        = CASE WHEN games.manual = 1 THEN games.title ELSE excluded.title END,
                 install_path = CASE WHEN games.manual = 1
                                     THEN games.install_path ELSE excluded.install_path END,
+                working_dir  = CASE WHEN games.manual = 1
+                                    THEN games.working_dir ELSE excluded.working_dir END,
                 -- The game is here again. Whatever was edited about it before it went is exactly
                 -- what this row still holds, which is the reason it was kept rather than deleted.
                 removed_at   = NULL,
@@ -245,6 +320,7 @@ internal sealed class GameLibrary
         command.Parameters.AddWithValue("$title", game.Title);
         command.Parameters.AddWithValue("$launch", game.LaunchCommand);
         command.Parameters.AddWithValue("$install", (object?)game.InstallPath ?? DBNull.Value);
+        command.Parameters.AddWithValue("$working", (object?)game.WorkingDirectory ?? DBNull.Value);
         command.Parameters.AddWithValue("$art", (object?)game.BoxArtPath ?? DBNull.Value);
         command.Parameters.AddWithValue("$stamp", stamp);
 
@@ -372,7 +448,7 @@ internal sealed class GameLibrary
             if (!string.IsNullOrWhiteSpace(row.InstallPath))
                 return !Directory.Exists(row.InstallPath);
 
-            var command = row.LaunchCommand.Trim().Trim('"');
+            var command = SessionLauncher.SplitCommand(row.LaunchCommand).File;
 
             var looksLikeAPath = command.Length > 3 &&
                                  (command[1] == ':' || command.StartsWith(@"\\", StringComparison.Ordinal));
@@ -451,6 +527,9 @@ internal sealed class GameLibrary
                     // Editing a game that had gone is how somebody says it is back — the row is
                     // still there for four months precisely so that this works.
                     "install_path = $install, manual = 1, removed_at = NULL, " +
+                    // The store's starting folder belongs to the store's install folder: kept
+                    // while that is, forgotten when somebody names a different one.
+                    "working_dir = CASE WHEN install_path IS $install THEN working_dir END, " +
                     "last_seen_at = $now WHERE id = $id;");
 
                 update.Parameters.AddWithValue("$title", title);
@@ -678,7 +757,8 @@ internal sealed class GameLibrary
         lock (_database.Gate)
         {
             using var command = _database.Command(
-                "SELECT launch_command, install_path, title, pointer, quality, starting_card " +
+                "SELECT launch_command, install_path, title, pointer, quality, starting_card, " +
+                "working_dir " +
                 "FROM games WHERE id = $id AND removed_at IS NULL;");
             command.Parameters.AddWithValue("$id", gameId);
 
@@ -691,7 +771,8 @@ internal sealed class GameLibrary
                 reader.GetString(2),
                 reader.GetInt64(3) != 0,
                 Quality(reader.GetInt64(4)),
-                reader.GetInt64(5) != 0);
+                reader.GetInt64(5) != 0,
+                reader.IsDBNull(6) ? null : reader.GetString(6));
         }
     }
 

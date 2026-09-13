@@ -127,6 +127,13 @@ internal static class XboxScanner
             var applicationId = executable?.Attribute("Id")?.Value;
 
             var familyName = ResolveFamilyName(identityName);
+            if (familyName is null &&
+                FamilyNameFromPublisher(identityName, identity?.Attribute("Publisher")?.Value) is { } computed)
+            {
+                familyName = computed;
+                Log.Info($"    \"{title}\": no package list names it; its family name is computed " +
+                         $"from the publisher as {computed}");
+            }
 
             string launch;
             string? externalId;
@@ -186,33 +193,97 @@ internal static class XboxScanner
         return Registry.CurrentUser.OpenSubKey($@"Software\Classes\{PackagesSubPath}");
     }
 
+    // Machine-wide lists of installed packages, by full name. Game Pass games are installed by
+    // Gaming Services for every account, and are not always in the person's own repository above.
+    private static readonly string[] MachinePackageLists =
+    {
+        @"SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Applications",
+        @"SOFTWARE\Microsoft\GamingServices\PackageRepository\Package",
+    };
+
     // The family name is the identity name plus a publisher hash, absent from the config. It comes
-    // from the AppModel key, whose names are Name_Version_Architecture_ResourceId_PublisherHash.
+    // from a key named after the package, Name_Version_Architecture_ResourceId_PublisherHash: the
+    // person's AppModel repository first, then the machine's own lists.
     private static string? ResolveFamilyName(string identityName)
+    {
+        using (var packages = OpenPackagesQuietly())
+        {
+            if (FamilyNameIn(packages, identityName) is { } own) return own;
+        }
+
+        foreach (var list in MachinePackageLists)
+        {
+            try
+            {
+                using var packages = Registry.LocalMachine.OpenSubKey(list);
+                if (FamilyNameIn(packages, identityName) is { } machine) return machine;
+            }
+            catch (Exception error)
+            {
+                Log.Info($"HKLM\\{list} could not be read: {error.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    private static RegistryKey? OpenPackagesQuietly()
     {
         try
         {
-            using var packages = OpenPackages();
-
-            if (packages is null) return null;
-
-            foreach (var fullName in packages.GetSubKeyNames())
-            {
-                if (!fullName.StartsWith(identityName + "_", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var hash = fullName[(fullName.LastIndexOf('_') + 1)..];
-                if (hash.Length == 0) continue;
-
-                return $"{identityName}_{hash}";
-            }
+            return OpenPackages();
         }
         catch (Exception error)
         {
             Log.Warn($"the package repository could not be read: {error.Message}");
+            return null;
+        }
+    }
+
+    private static string? FamilyNameIn(RegistryKey? packages, string identityName)
+    {
+        if (packages is null) return null;
+
+        foreach (var fullName in packages.GetSubKeyNames())
+        {
+            if (FamilyNameOf(fullName, identityName) is { } family) return family;
         }
 
         return null;
+    }
+
+    // The family name as Windows derives it, when no list of packages names this one: the identity
+    // name, an underscore, and the publisher's hash — the first 8 bytes of the SHA-256 of the
+    // publisher string in UTF-16LE, as 13 characters of Crockford's base32. The same 8wekyb3d8bbwe
+    // every Microsoft package ends in, computed rather than looked up.
+    internal static string? FamilyNameFromPublisher(string identityName, string? publisher)
+    {
+        if (string.IsNullOrWhiteSpace(publisher)) return null;
+
+        const string alphabet = "0123456789abcdefghjkmnpqrstvwxyz";
+
+        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.Unicode.GetBytes(publisher));
+        var bits = BitConverter.ToUInt64([hash[7], hash[6], hash[5], hash[4], hash[3], hash[2], hash[1], hash[0]]);
+
+        // 64 bits padded with one zero to 65, read five at a time from the top.
+        var text = new StringBuilder(13);
+        for (var i = 0; i < 13; i++)
+        {
+            var shift = 64 - 5 * (i + 1);
+            var index = shift >= 0 ? (int)((bits >> shift) & 31) : (int)((bits << 1) & 31);
+            text.Append(alphabet[index]);
+        }
+
+        return $"{identityName}_{text}";
+    }
+
+    // The family name out of a package's full name, when that package is the identity asked for.
+    internal static string? FamilyNameOf(string fullName, string identityName)
+    {
+        if (!fullName.StartsWith(identityName + "_", StringComparison.OrdinalIgnoreCase)) return null;
+
+        var hash = fullName[(fullName.LastIndexOf('_') + 1)..];
+        return hash.Length == 0 ? null : $"{identityName}_{hash}";
     }
 
     // The image ShellVisuals names, or the conventional StoreLogo.png. Landscape and square logos

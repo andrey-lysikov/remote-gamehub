@@ -511,26 +511,31 @@ internal sealed class SessionManager : IDisposable
             return false;
         }
 
+        // From its own folder when one is known: games that look for their data beside the
+        // working directory otherwise start into an error naming this server's folder. The
+        // store's own starting folder first, where it named one.
+        var workingDirectory = new[] { target.WorkingDirectory, target.InstallPath }
+            .FirstOrDefault(folder => !string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder));
+
         try
         {
             // As the person signed in whenever this server is SYSTEM: a game run as SYSTEM finds no
             // saves, no launcher session, no settings, and several refuse to start at all.
             if (PlatformGuard.IsSystem)
             {
-                if (!SessionLauncher.StartAsConsoleUser(target.Command, target.InstallPath))
+                if (!SessionLauncher.StartAsConsoleUser(target.Command, workingDirectory))
                     return false;
             }
             else
             {
                 // A packaged game is addressed by a shell: path, which nothing but Explorer resolves.
+                // A quoted path with arguments after it (a launcher told which game) is split.
+                var (file, arguments) = SessionLauncher.SplitCommand(target.Command);
                 var start = target.Command.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)
                     ? new ProcessStartInfo("explorer.exe", target.Command) { UseShellExecute = true }
-                    : new ProcessStartInfo(target.Command) { UseShellExecute = true };
+                    : new ProcessStartInfo(file, arguments) { UseShellExecute = true };
 
-                // From its own folder when one is known: games that look for their data beside the
-                // working directory otherwise start into an error naming this server's folder.
-                if (!string.IsNullOrWhiteSpace(target.InstallPath) && Directory.Exists(target.InstallPath))
-                    start.WorkingDirectory = target.InstallPath;
+                if (workingDirectory is not null) start.WorkingDirectory = workingDirectory;
 
                 Process.Start(start);
             }
