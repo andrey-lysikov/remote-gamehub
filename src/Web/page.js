@@ -78,6 +78,16 @@ $('rescan').addEventListener('click',async e=>{const b=e.target;b.disabled=true;
 scansaid.textContent=await (await fetch('/?rescan=1')).text();
 setTimeout(reload,2000);
 setTimeout(()=>{reload();scansaid.textContent='';b.disabled=false;},6000);});
+// Check version. One request at a time: GitHub allows sixty an hour without a token, and a
+// few impatient clicks should not spend them. The answer stays on the link for a few seconds;
+// a newer version also appears on the host line with the next status poll.
+const checkversion=$('checkversion');
+checkversion.addEventListener('click',async e=>{e.preventDefault();
+if(checkversion.dataset.busy)return;checkversion.dataset.busy='1';
+checkversion.textContent='Checking…';
+try{checkversion.textContent=await (await fetch('/?checkupdate=1')).text();}
+catch{checkversion.textContent='Check failed';}
+setTimeout(()=>{checkversion.textContent='Check version';delete checkversion.dataset.busy;},5000);});
 function open(id,name,starts,from,pointerOn,level,cardOn){editing=id;
 $('editortitle').textContent=id?'Edit game':'Add a game';
 title.value=name||'';command.value=starts||'';folder.value=from||'';

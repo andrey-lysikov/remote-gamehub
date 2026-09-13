@@ -64,9 +64,13 @@ internal sealed class UpdateChecker : IDisposable
         });
     }
 
-    // One check. Returns the newer version, or null when there is none or the question could not
-    // be asked — no network, a rate limit, a rewritten API.
-    internal async Task<string?> CheckAsync()
+    // What one check came to. Failed is kept apart from Current because the page's button says
+    // which it was: "up to date" after a request that never arrived would be a lie.
+    internal enum Outcome { Newer, Current, Failed }
+
+    // One check. Newer when a newer version is out (it is in Newer then), Current when there is
+    // none, Failed when the question could not be asked — no network, a rate limit, a rewritten API.
+    internal async Task<Outcome> CheckAsync()
     {
         try
         {
@@ -76,17 +80,17 @@ internal sealed class UpdateChecker : IDisposable
             if (answer.StatusCode == HttpStatusCode.NotFound)
             {
                 Log.Info("update check: no releases published yet");
-                return null;
+                return Outcome.Current;
             }
 
             answer.EnsureSuccessStatusCode();
             var json = await answer.Content.ReadAsStringAsync(_stopping.Token);
 
             using var document = JsonDocument.Parse(json);
-            if (!document.RootElement.TryGetProperty("tag_name", out var tag)) return null;
+            if (!document.RootElement.TryGetProperty("tag_name", out var tag)) return Outcome.Failed;
 
             var latest = (tag.GetString() ?? string.Empty).TrimStart('v', 'V');
-            if (latest.Length == 0) return null;
+            if (latest.Length == 0) return Outcome.Failed;
 
             // The release's own page, checked against the project: an answer from anywhere else
             // (a renamed or redirected repository) is not news about this server and is dropped.
@@ -96,13 +100,13 @@ internal sealed class UpdateChecker : IDisposable
             {
                 Log.Warn($"update check: {AppParameters.Links.LatestReleaseApi} answered with a " +
                          $"release of another project ({page}); it is ignored");
-                return null;
+                return Outcome.Failed;
             }
 
             var current = Program.Version;
             Log.Info($"update check: running {current}, latest {latest} ({page ?? "no page named"})");
 
-            if (!IsNewer(latest, current)) return null;
+            if (!IsNewer(latest, current)) return Outcome.Current;
 
             if (_newer != latest)
             {
@@ -111,16 +115,16 @@ internal sealed class UpdateChecker : IDisposable
                 Found?.Invoke(latest);
             }
 
-            return latest;
+            return Outcome.Newer;
         }
         catch (OperationCanceledException)
         {
-            return null;
+            return Outcome.Failed;
         }
         catch (Exception error)
         {
             Log.Info($"the update check did not go through: {error.Message}");
-            return null;
+            return Outcome.Failed;
         }
     }
 

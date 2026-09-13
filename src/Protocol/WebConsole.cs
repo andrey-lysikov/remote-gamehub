@@ -202,6 +202,19 @@ internal sealed class WebConsole : IAsyncDisposable
             return;
         }
 
+        // The daily update check, asked for now from the header. A newer version found this way
+        // also lands on the host line and in the tray, exactly as the daily one would put it.
+        if (request.Query("checkupdate") is not null)
+        {
+            await WriteAsync(stream, 200, "text/plain", await _updates.CheckAsync() switch
+            {
+                UpdateChecker.Outcome.Newer => $"v{_updates.Newer} is out",
+                UpdateChecker.Outcome.Current => "Up to date",
+                _ => "Check failed",
+            });
+            return;
+        }
+
         if (request.Query("waiting") is not null)
         {
             await WriteAsync(stream, 200, "text/plain", _pairing.WaitingFor ?? string.Empty);
