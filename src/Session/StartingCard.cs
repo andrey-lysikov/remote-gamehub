@@ -15,9 +15,10 @@ namespace RemoteGameHub.Session;
 // desktop. Redrawn now and then rather than once, so the spinner under the caption turns.
 internal sealed unsafe class StartingCard : IDisposable
 {
-    // How often the card is redrawn for the spinner's sake. Fast enough to look like it is
-    // turning, slow enough that redrawing the whole picture is not real work.
-    private static readonly TimeSpan RedrawEvery = TimeSpan.FromMilliseconds(66);
+    // How often the card is redrawn for the spinner's sake. Fast enough that the dots' sprints
+    // read as movement rather than as jumps, slow enough that redrawing the whole picture is not
+    // real work.
+    private static readonly TimeSpan RedrawEvery = TimeSpan.FromMilliseconds(40);
 
     private void* _texture;
     private void* _staging;
@@ -67,7 +68,7 @@ internal sealed unsafe class StartingCard : IDisposable
 
         try
         {
-            using var picture = Draw(width, height, title, poster, 0);
+            using var picture = Draw(width, height, title, poster, TimeSpan.Zero);
 
             var description = new D3D11Texture2DDesc
             {
@@ -119,8 +120,8 @@ internal sealed unsafe class StartingCard : IDisposable
         }
     }
 
-    // The game's picture, decoded once for the life of the card: it is drawn again fifteen times
-    // a second for the spinner, and opening the file each time was a decode per redraw.
+    // The game's picture, decoded once for the life of the card: it is drawn again twenty-five
+    // times a second for the spinner, and opening the file each time was a decode per redraw.
     private static Image? LoadPoster(string? posterPath)
     {
         if (posterPath is null || !File.Exists(posterPath)) return null;
@@ -146,8 +147,7 @@ internal sealed unsafe class StartingCard : IDisposable
 
         try
         {
-            using var picture = Draw(_width, _height, _title, _poster,
-                (float)(now.TotalMilliseconds % 1500 / 1500 * 360));
+            using var picture = Draw(_width, _height, _title, _poster, now);
             Upload(_context, _staging, _texture, picture, _width, _height, _format);
         }
         catch (Exception error)
@@ -159,7 +159,7 @@ internal sealed unsafe class StartingCard : IDisposable
     // ------------------------------------------------------------------ the drawing
 
     private static Bitmap Draw(int width, int height, string title, Image? poster,
-                               float spinnerAngle)
+                               TimeSpan elapsed)
     {
         var dark = ThemeIcons.AppsAreDark();
         var background = BackgroundOf(dark);
@@ -203,27 +203,85 @@ internal sealed unsafe class StartingCard : IDisposable
             // top of: LineAlignment.Near leaves most of caption's own height empty below it.
             var textBottom = caption.Top + (int)font.GetHeight(canvas);
             DrawSpinner(canvas, width, textBottom + (int)(height * 0.025), height, foreground,
-                spinnerAngle);
+                elapsed);
         }
 
         return picture;
     }
 
-    // Windows' own indeterminate ring, under the caption, so a game taking its time reads as
-    // loading rather than as this server having stopped.
+    // Windows' own boot spinner, under the caption, so a game taking its time reads as loading
+    // rather than as this server having stopped: dots chasing each other round a circle, rushing
+    // and slowing, twice round and then gone before the next lap starts.
     private static void DrawSpinner(Graphics canvas, int width, int top, int height,
-                                    Color foreground, float angle)
+                                    Color foreground, TimeSpan elapsed)
     {
-        var diameter = (int)(height * 0.045);
-        var area = new Rectangle(width / 2 - diameter / 2, top, diameter, diameter);
+        var diameter = height * 0.05f;
+        var centre = new PointF(width / 2f, top + diameter / 2);
+        var radius = diameter / 2;
+        var dot = Math.Max(2f, diameter * 0.11f);
 
-        using var pen = new Pen(foreground, Math.Max(2f, diameter * 0.12f))
+        using var brush = new SolidBrush(foreground);
+
+        for (var i = 0; i < SpinnerDots; i++)
         {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
-        };
+            // Each dot runs the same lap, a little behind the one before it.
+            var ms = elapsed.TotalMilliseconds - i * SpinnerDotLagMs;
+            if (ms < 0) continue;
 
-        canvas.DrawArc(pen, area, angle, 100f);
+            var t = (float)(ms % SpinnerCycleMs / SpinnerCycleMs);
+            if (SpinnerAngle(t) is not { } degrees) continue;
+
+            // Degrees clockwise from the top, as the keyframes are written.
+            var radians = degrees * MathF.PI / 180;
+            var x = centre.X + radius * MathF.Sin(radians);
+            var y = centre.Y - radius * MathF.Cos(radians);
+
+            canvas.FillEllipse(brush, x - dot / 2, y - dot / 2, dot, dot);
+        }
+    }
+
+    private const int SpinnerDots = 5;
+    private const double SpinnerCycleMs = 5500;
+    private const double SpinnerDotLagMs = 240;
+
+    // Where a dot is at a point of its lap, t from 0 to 1, or null while it is out of sight. The
+    // keyframes are the Windows progress ring's own: a quick start, a slow crawl over the top, a
+    // rush down, another crawl, and a last sprint to where it disappears.
+    private static float? SpinnerAngle(float t) => t switch
+    {
+        < 0.07f => Between(225, 345, t, 0, 0.07f, EaseOut),
+        < 0.30f => Between(345, 455, t, 0.07f, 0.30f, Linear),
+        < 0.39f => Between(455, 690, t, 0.30f, 0.39f, EaseInOut),
+        < 0.70f => Between(690, 815, t, 0.39f, 0.70f, Linear),
+        < 0.75f => Between(815, 945, t, 0.70f, 0.75f, EaseOut),
+        _ => null,
+    };
+
+    private static float Between(float from, float to, float t, float start, float end,
+                                 Func<float, float> easing) =>
+        from + (to - from) * easing((t - start) / (end - start));
+
+    private static float Linear(float x) => x;
+
+    // CSS's ease-out and ease-in-out, which is what the keyframes were timed with.
+    private static float EaseOut(float x) => CubicBezier(0f, 0f, 0.58f, 1f, x);
+    private static float EaseInOut(float x) => CubicBezier(0.42f, 0f, 0.58f, 1f, x);
+
+    // The y of a CSS cubic-bezier at a given x, found by halving: the curve's x only ever grows,
+    // and twenty halvings are finer than any pixel this is drawn at.
+    private static float CubicBezier(float x1, float y1, float x2, float y2, float x)
+    {
+        static float At(float a, float b, float s) =>
+            3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s;
+
+        float low = 0, high = 1, s = x;
+        for (var i = 0; i < 20; i++)
+        {
+            s = (low + high) / 2;
+            if (At(x1, x2, s) < x) low = s; else high = s;
+        }
+
+        return At(y1, y2, s);
     }
 
     // The game's own picture when there is one, and a lettered tile when there is not — which
