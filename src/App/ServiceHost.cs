@@ -38,6 +38,14 @@ internal static class ServiceHost
     // The server as SYSTEM on the console. Zero while nobody is signed in to start it for.
     private static nint _worker;
 
+    // The worker's own number, kept beside the handle: the handle says nothing a person can look
+    // up afterwards, and a worker that died is named by its number in every other log there is.
+    private static uint _workerPid;
+
+    // Why this service is stopping, said by the control handler and read where the worker is
+    // ended: a shutdown ends the worker on its own, and that is not the same as a fault.
+    private static string _stopReason = "the service was asked to stop";
+
     // How long the worker may take to close itself before it is ended: enough for the listeners
     // and the stream, short enough not to hold up a shutdown. WAIT_OBJECT_0 (zero) means it left.
     private const uint GracefulExitMs = 4000;
@@ -89,6 +97,7 @@ internal static class ServiceHost
         {
             ServiceType = Advapi32.SERVICE_WIN32_OWN_PROCESS,
             ControlsAccepted = Advapi32.SERVICE_ACCEPT_STOP | Advapi32.SERVICE_ACCEPT_SHUTDOWN |
+                               Advapi32.SERVICE_ACCEPT_POWEREVENT |
                                Advapi32.SERVICE_ACCEPT_SESSIONCHANGE,
         };
 
@@ -190,6 +199,13 @@ internal static class ServiceHost
                 var lived = DateTime.UtcNow - startedAt;
                 var quickly = lived < TimeSpan.FromSeconds(20);
 
+                // Read before the handle goes: the code and the state of the session it ran in
+                // are the whole of the difference between a sign-out and a crash.
+                var code = ExitCodeOf(_worker);
+                var state = Wtsapi32.DescribeState(Wtsapi32.StateOf(workerSession));
+                var signedIn = workerSession != Wtsapi32.NoSession && SignedInQuietly(workerSession);
+                var pid = _workerPid;
+
                 endedAt = DateTime.UtcNow;
                 backoff = quickly
                     ? TimeSpan.FromSeconds(Math.Min(maximumBackoff.TotalSeconds,
@@ -200,6 +216,34 @@ internal static class ServiceHost
 
                 Kernel32.CloseHandle(_worker);
                 _worker = 0;
+                _workerPid = 0;
+
+                // Said before anything is decided, so that it is written even when what follows
+                // is the service giving up: this is the one record of how the worker ended.
+                if (code == DbgTerminateProcess)
+                {
+                    // Windows ending the session's processes: a sign-out or a shutdown, never a
+                    // fault. The session still reads as active and signed in, because the news of
+                    // its end reaches this service a moment after the worker is gone.
+                    Log.Event(
+                        $"the worker (pid {pid}) ended after {lived.TotalSeconds:0} s, " +
+                        $"{DescribeExit(code)}: a sign-out or a shutdown, not a fault");
+                }
+                else
+                {
+                    Log.Warn(
+                        $"the worker (pid {pid}) ended after {lived.TotalSeconds:0} s, " +
+                        $"{DescribeExit(code)}.\n" +
+                        $"The session it ran in ({workerSession}) is {state} and " +
+                        (signedIn ? "somebody is still signed in to it" : "nobody is signed in to it") +
+                        ".\n" +
+                        (signedIn
+                            ? "Its own lines above say why it stopped, if it was able to say."
+                            : "A worker that ends as its session does was ended by Windows with the " +
+                              "session, which is\nordinary: a sign-out or a shutdown reaches it before " +
+                              "it reaches this service."));
+                }
+
                 workerSession = Wtsapi32.NoSession;
 
                 if (failures >= GiveUpAfter)
@@ -215,10 +259,8 @@ internal static class ServiceHost
                     break;
                 }
 
-                Log.Warn($"the worker ended after " +
-                         $"{lived.TotalSeconds:0} s; it will be started again in " +
-                         $"{backoff.TotalSeconds:0} s, if there is still somebody to start it for. " +
-                         "Its own lines above say why it stopped.");
+                Log.Info($"the worker will be started again in {backoff.TotalSeconds:0} s, if " +
+                         "there is still somebody to start it for");
             }
 
             // Whether there is anybody to stream for, said only when the answer changes and never
@@ -248,6 +290,7 @@ internal static class ServiceHost
                 startedAt = DateTime.UtcNow;
                 FollowSession(target);
                 _worker = SessionLauncher.StartServerAsSystem(target, "--worker");
+                _workerPid = _worker == 0 ? 0 : Kernel32.GetProcessId(_worker);
                 workerSession = _worker == 0 ? Wtsapi32.NoSession : target;
 
                 if (_worker == 0)
@@ -378,15 +421,42 @@ internal static class ServiceHost
         {
             // Said here because the worker cannot say it: ended from outside, its own log stops
             // at whatever it wrote last, which reads as a crash to anybody who finds it.
-            Log.Event("the worker had not left on its own after " +
-                      $"{GracefulExitMs / 1000} s and is being ended by the service");
+            Log.Event($"the worker (pid {_workerPid}) had not left on its own after " +
+                      $"{GracefulExitMs / 1000} s and is being ended by the service, because " +
+                      $"{_stopReason}");
             Kernel32.TerminateProcess(_worker, 0);
             Kernel32.WaitForMultipleObjects(1, new[] { _worker }, true, 5000);
         }
 
         Kernel32.CloseHandle(_worker);
         _worker = 0;
+        _workerPid = 0;
     }
+
+    // The code Windows ends a process with when it ends the session the process runs in.
+    private const uint DbgTerminateProcess = 0x40010004;
+
+    // What a process's exit code was, or zero when it cannot be read. Windows puts the reason a
+    // process was ended here, and the reasons are distinguishable — see DescribeExit.
+    private static uint ExitCodeOf(nint process) =>
+        Kernel32.GetExitCodeProcess(process, out var code) ? code : 0;
+
+    // The exit code in words. The high values are NTSTATUS: Windows ends a process with one of
+    // these rather than with a number the process chose, and each names a different morning.
+    private static string DescribeExit(uint code) => code switch
+    {
+        0 => "having closed itself (exit code 0)",
+        1 => "refusing to start (exit code 1 — its own lines say what it could not open)",
+        DbgTerminateProcess =>"because Windows ended it with the session it was in (DBG_TERMINATE_PROCESS)",
+        0xC000013A => "because it was asked to close and did not (CTRL_C / STATUS_CONTROL_C_EXIT)",
+        0xC0000005 => "by crashing on a bad memory access (STATUS_ACCESS_VIOLATION)",
+        0xC0000409 => "by crashing with a corrupted stack (STATUS_STACK_BUFFER_OVERRUN)",
+        0xC0000374 => "by crashing with a corrupted heap (STATUS_HEAP_CORRUPTION)",
+        0xC00000FD => "by crashing out of stack (STATUS_STACK_OVERFLOW)",
+        0xE0434352 => "on an exception nothing caught (a .NET exception; the stack is above)",
+        _ when code >= 0xC0000000 => $"by crashing (exit code 0x{code:X8})",
+        _ => $"with exit code {code} (0x{code:X8})",
+    };
 
     private static uint Handler(uint control, uint eventType, nint eventData, nint context)
     {
@@ -394,6 +464,11 @@ internal static class ServiceHost
         {
             case Advapi32.SERVICE_CONTROL_STOP:
             case Advapi32.SERVICE_CONTROL_SHUTDOWN:
+                _stopReason = control == Advapi32.SERVICE_CONTROL_SHUTDOWN
+                    ? "Windows is shutting this machine down"
+                    : "the service was asked to stop";
+
+                Log.Event($"the service was told to stop: {_stopReason}");
                 Report(Advapi32.SERVICE_STOP_PENDING, waitHintMs: 6000);
                 Stopping.Set();
                 return Advapi32.NO_ERROR;
@@ -401,6 +476,23 @@ internal static class ServiceHost
             case Advapi32.SERVICE_CONTROL_SESSIONCHANGE:
                 // Every reason is treated the same, and none of them is acted on here: the
                 // supervisor asks Windows which session the console is now and decides from that.
+                // Written down all the same: this is the only record of what moved and when, and
+                // a worker that ends seconds after a sign-out ended with it rather than by itself.
+                Log.Event($"session {Wtsapi32.SessionOf(eventData)}: " +
+                          Wtsapi32.DescribeChange(eventType));
+
+                SessionChanged.Set();
+                return Advapi32.NO_ERROR;
+
+            case Advapi32.SERVICE_CONTROL_POWEREVENT:
+                // Not acted on: the worker is told the same thing in its own session and ends the
+                // stream itself, which is where the stream is. Written down because a log that
+                // skips the sleep makes the hours either side of it read as one unbroken run.
+                Log.Event(Advapi32.DescribePowerEvent(eventType));
+
+                // A wake can come with the console somewhere else — a remote desktop connection is
+                // one of the things that wakes a machine — so the supervisor looks now, not in a
+                // second's time. A suspend costs it one harmless turn.
                 SessionChanged.Set();
                 return Advapi32.NO_ERROR;
 

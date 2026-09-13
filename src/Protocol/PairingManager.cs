@@ -2,6 +2,7 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Formats.Asn1;
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -23,6 +24,10 @@ internal sealed class PairingManager
     private sealed class Session
     {
         internal required string UniqueId { get; init; }
+
+        // Where the attempt came from, kept so that an attempt which ends without another request
+        // — a PIN nobody typed, a Cancel on the page — can still be counted against its address.
+        internal IPAddress? Address { get; init; }
 
         // What the device is called: as sent by the client — Moonlight sends the same word from
         // every device — and then what the person typed on the page.
@@ -52,14 +57,16 @@ internal sealed class PairingManager
 
     private readonly HostIdentity _identity;
     private readonly ClientStore _clients;
+    private readonly AccessGuard _guard;
 
     // Raised when a client starts pairing, so that the user can be told where to type.
     internal event Action<string>? PairingStarted;
 
-    internal PairingManager(HostIdentity identity, ClientStore clients)
+    internal PairingManager(HostIdentity identity, ClientStore clients, AccessGuard guard)
     {
         _identity = identity;
         _clients = clients;
+        _guard = guard;
     }
 
     // Whether anything is waiting for a PIN. Used by the page that asks for one.
@@ -96,29 +103,37 @@ internal sealed class PairingManager
     // request is refused rather than left parked, so the client stops showing its digits.
     internal bool CancelWaiting()
     {
+        Session waiting;
+
         lock (_gate)
         {
-            var waiting = _sessions.Values.FirstOrDefault(s => !s.Pin.Task.IsCompleted);
-            if (waiting is null) return false;
+            var found = _sessions.Values.FirstOrDefault(s => !s.Pin.Task.IsCompleted);
+            if (found is null) return false;
 
+            waiting = found;
             waiting.Abandoned = true;
             waiting.Pin.TrySetCanceled();
             _sessions.Remove(waiting.UniqueId);
             waiting.ClientCertificate.Dispose();
-
-            Log.Info($"pairing with \"{waiting.DeviceName}\" was cancelled from the page");
-            return true;
         }
+
+        Log.Info($"pairing with \"{waiting.DeviceName}\" was cancelled from the page");
+
+        // Refusing an attempt at the machine itself is the plainest statement there is that it
+        // was not wanted, so it counts against the address the same as a wrong PIN.
+        _guard.Failed(waiting.Address, "the pairing was refused at this machine");
+        return true;
     }
 
-    internal async Task<string> HandleAsync(HttpRequest request, CancellationToken cancel)
+    internal async Task<string> HandleAsync(HttpRequest request, IPAddress? address,
+                                           CancellationToken cancel)
     {
         var uniqueId = request.Query("uniqueid") ?? "unknown";
         var phrase = request.Query("phrase");
 
         // The five steps, told apart by which parameter is present. The protocol has no step
         // number: it is the shape of the request that says where in the exchange it is.
-        if (phrase == "getservercert") return await StartSessionAsync(request, uniqueId, cancel);
+        if (phrase == "getservercert") return await StartSessionAsync(request, uniqueId, address, cancel);
         if (request.Query("clientchallenge") is { } challenge) return AnswerChallenge(uniqueId, challenge);
         if (request.Query("serverchallengeresp") is { } response) return AnswerChallengeResponse(uniqueId, response);
         if (request.Query("clientpairingsecret") is { } secret) return VerifyClient(uniqueId, secret);
@@ -132,7 +147,7 @@ internal sealed class PairingManager
     // Records the attempt and holds its answer until the PIN has been typed: the certificate handed
     // over here is what lets the client speak TLS to this machine afterwards.
     private async Task<string> StartSessionAsync(HttpRequest request, string uniqueId,
-                                                 CancellationToken cancel)
+                                                 IPAddress? address, CancellationToken cancel)
     {
         var saltText = request.Query("salt");
         var certificateText = request.Query("clientcert");
@@ -156,10 +171,15 @@ internal sealed class PairingManager
         var session = new Session
         {
             UniqueId = uniqueId,
+            Address = address,
             DeviceName = name,
             Salt = Convert.FromHexString(saltText),
             ClientCertificate = clientCertificate,
         };
+
+        // What the previous attempt from this client came to, counted after the lock: the guard
+        // writes to the log, and nothing that writes belongs inside a lock this small.
+        string? failed = null;
 
         lock (_gate)
         {
@@ -179,6 +199,8 @@ internal sealed class PairingManager
                         "entered here\nwere not the ones it was showing. Each attempt has its own " +
                         "PIN: read the one on\nthe client's screen now, not the one from a moment " +
                         "ago.");
+
+                    failed = "the client rejected the answer, so the PIN was wrong";
                 }
                 else
                 {
@@ -189,6 +211,8 @@ internal sealed class PairingManager
 
             _sessions[uniqueId] = session;
         }
+
+        if (failed is not null) _guard.Failed(address, failed);
 
         Log.Event($"pairing step 1 of 5: \"{name}\" ({uniqueId}) asked for the certificate and is " +
                  "waiting for its PIN");
@@ -207,6 +231,10 @@ internal sealed class PairingManager
             Log.Warn(
                 $"\"{name}\" was not given a PIN within {PinWait.TotalMinutes:0} minutes and was " +
                 "forgotten.\nAsk the client to pair again, and type the digits it shows then.");
+
+            // Nobody answered it, which from outside this network is the same as being turned
+            // away: an address that asks and is ignored is asking for something it was not given.
+            _guard.Failed(address, $"no PIN was entered within {PinWait.TotalMinutes:0} minutes");
             return Failed("No PIN was entered on the host in time.");
         }
         catch (OperationCanceledException) when (session.Pin.Task.IsCanceled)
@@ -369,6 +397,9 @@ internal sealed class PairingManager
             Forget(uniqueId);
             Log.Warn($"\"{session.DeviceName}\" failed pairing: its secret was not signed by the " +
                      "certificate it presented.");
+
+            _guard.Failed(session.Address,
+                          "its secret was not signed by the certificate it presented");
             return Failed("The client's secret was not signed by the certificate it presented.");
         }
 
@@ -383,12 +414,15 @@ internal sealed class PairingManager
             // everything up to this point succeeded, and the message the client shows is vague.
             Log.Warn($"\"{session.DeviceName}\" failed pairing: the PIN entered on this machine did " +
                      "not match the one the client is showing. Ask it to pair again.");
+
+            _guard.Failed(session.Address, "the PIN did not match the one the client was showing");
             return Failed("The PIN entered on the host does not match the one this client is showing.");
         }
 
         // Admitted, with nothing to approve: the first client to ask is the client that is trusted,
         // under the name the person gave it on the page.
         _clients.Admit(session.UniqueId, session.DeviceName, session.ClientCertificate);
+        _guard.Succeeded(session.Address);
 
         return Document(xml => xml.WriteElementString("paired", "1"));
     }

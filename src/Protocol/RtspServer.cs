@@ -66,6 +66,12 @@ internal sealed class RtspServer : IAsyncDisposable
 
     private readonly AppConfig _config;
     private readonly EncoderCapabilities _encoder;
+    private readonly AccessGuard _guard;
+
+    // Whether this server asked the address to negotiate: it launched or resumed a moment ago, or
+    // it is the one already streaming. This port has no certificate to go on, so this is the test.
+    private readonly Func<IPAddress?, bool> _expected;
+
     private readonly CancellationTokenSource _stopping = new();
 
     private TcpListener? _listener;
@@ -74,10 +80,13 @@ internal sealed class RtspServer : IAsyncDisposable
     // Raised on the connection's thread when an ANNOUNCE has been accepted.
     internal event Action<StreamNegotiation>? Negotiated;
 
-    internal RtspServer(AppConfig config, EncoderCapabilities encoder)
+    internal RtspServer(AppConfig config, EncoderCapabilities encoder, AccessGuard guard,
+                        Func<IPAddress?, bool> expected)
     {
         _config = config;
         _encoder = encoder;
+        _guard = guard;
+        _expected = expected;
     }
 
     internal void Start()
@@ -134,6 +143,32 @@ internal sealed class RtspServer : IAsyncDisposable
     private async Task ServeAsync(TcpClient client)
     {
         var peer = Peer.Plain((client.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None);
+
+        // A refused address is refused here too: the pairing ports are where it earned the
+        // refusal, and leaving this one open would let it negotiate a stream all the same.
+        if (_guard.IsBlocked(peer, out var left))
+        {
+            Log.WarnOccasionally($"blocked {peer}",
+                $"{peer} was dropped at the RTSP port without being read: it is refused for " +
+                $"another {left.TotalMinutes:0} minute(s) after failing to pair.");
+
+            client.Close();
+            return;
+        }
+
+        // Nothing negotiates here uninvited: a client reaches this port because /launch or
+        // /resume sent it, and both are refused to anybody this server has not admitted. Whoever
+        // arrives without that is somebody who found the port, and is counted for it.
+        if (!_expected(peer))
+        {
+            Log.Warn($"{peer} asked to negotiate a stream that was never launched from it; " +
+                     "the connection is dropped");
+
+            _guard.Failed(peer, "it asked to negotiate a stream it had not launched");
+
+            client.Close();
+            return;
+        }
 
         try
         {

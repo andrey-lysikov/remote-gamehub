@@ -23,7 +23,7 @@
     <Authors>Andrey.Lysikov and Claude</Authors>
     <Copyright>© Andrey Lysikov, Apache 2.0 licence.</Copyright>
     <Description>Desktop and game streaming to Moonlight clients, encoded on the graphics card.</Description>
-    <Version>1.4</Version>
+    <Version>1.5</Version>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -62,6 +62,13 @@
     <EmbeddedResource Include="$(IconFile)"
                       LogicalName="RemoteGameHub.Icons.%(Filename)%(Extension)" />
 
+
+    <!-- The page: its markup, its stylesheet and its script, as three files rather than as string
+         literals in C#, where nothing checked their syntax. Embedded rather than shipped beside the
+         exe, because one exe was promised; WebAssets.cs asks for them by these names. -->
+    <EmbeddedResource Include="Web\page.html" LogicalName="RemoteGameHub.Web.page.html" />
+    <EmbeddedResource Include="Web\page.css" LogicalName="RemoteGameHub.Web.page.css" />
+    <EmbeddedResource Include="Web\page.js" LogicalName="RemoteGameHub.Web.page.js" />
 
     <!-- The picture a client shows beside "Desktop". Embedded rather than fetched or looked for on
          disk: it is the one entry that is always there, so its cover must always be there too. -->

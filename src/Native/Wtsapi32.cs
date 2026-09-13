@@ -53,6 +53,59 @@ internal static class Wtsapi32
     internal const int WTSDown = 8;
     internal const int WTSInit = 9;
 
+    // WTS_* — why a service was told the sessions moved. They arrive as the eventType of
+    // SERVICE_CONTROL_SESSIONCHANGE, with the session's number in the structure below.
+    internal const uint WtsConsoleConnect = 0x1;
+    internal const uint WtsConsoleDisconnect = 0x2;
+    internal const uint WtsRemoteConnect = 0x3;
+    internal const uint WtsRemoteDisconnect = 0x4;
+    internal const uint WtsSessionLogon = 0x5;
+    internal const uint WtsSessionLogoff = 0x6;
+    internal const uint WtsSessionLock = 0x7;
+    internal const uint WtsSessionUnlock = 0x8;
+    internal const uint WtsSessionRemoteControl = 0x9;
+    internal const uint WtsSessionCreate = 0xA;
+    internal const uint WtsSessionTerminate = 0xB;
+
+    internal static string DescribeChange(uint eventType) => eventType switch
+    {
+        WtsConsoleConnect => "a session took the console",
+        WtsConsoleDisconnect => "a session left the console",
+        WtsRemoteConnect => "somebody connected over remote desktop",
+        WtsRemoteDisconnect => "a remote desktop connection was dropped without signing out",
+        WtsSessionLogon => "somebody signed in",
+        WtsSessionLogoff => "somebody signed out",
+        WtsSessionLock => "the screen was locked",
+        WtsSessionUnlock => "the screen was unlocked",
+        WtsSessionRemoteControl => "the session's remote control state changed",
+        WtsSessionCreate => "a session was created",
+        WtsSessionTerminate => "a session was ended",
+        _ => $"event {eventType}",
+    };
+
+    // WTSSESSION_NOTIFICATION, the payload of SERVICE_CONTROL_SESSIONCHANGE: which session the
+    // event above is about. Without it every change reads as "something moved, somewhere".
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SessionNotification
+    {
+        internal uint Size;
+        internal uint SessionId;
+    }
+
+    internal static uint SessionOf(nint eventData)
+    {
+        if (eventData == 0) return NoSession;
+
+        try
+        {
+            return Marshal.PtrToStructure<SessionNotification>(eventData).SessionId;
+        }
+        catch (Exception)
+        {
+            return NoSession;
+        }
+    }
+
     // WTS_CURRENT_SERVER_HANDLE: this machine.
     private const nint CurrentServer = 0;
 

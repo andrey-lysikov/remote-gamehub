@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using RemoteGameHub.Media;
 using RemoteGameHub.App;
 using RemoteGameHub.Library;
@@ -28,9 +29,15 @@ internal sealed class SessionManager : IDisposable
     private readonly GamepadHub _gamepads;
     private readonly TrayIcon _tray;
     private readonly SessionWatch _sessionWatch;
+    private readonly ScaleStore _scales;
     private readonly object _gate = new();
 
     private LaunchRequest? _pending;
+
+    // Where the launch that is waiting to be negotiated came from. The RTSP port has no client
+    // certificate to go on, so this is the whole of what says an ANNOUNCE there was expected.
+    private IPAddress? _pendingFor;
+
     private StreamSession? _session;
     private GameWatcher? _watcher;
 
@@ -44,7 +51,7 @@ internal sealed class SessionManager : IDisposable
 
     internal SessionManager(AppConfig config, DisplayOutput output, EncoderCapabilities encoder,
                             GameLibrary games, GamepadHub gamepads, TrayIcon tray,
-                            SessionWatch sessionWatch)
+                            SessionWatch sessionWatch, ScaleStore scales)
     {
         _config = config;
         _output = output;
@@ -53,6 +60,7 @@ internal sealed class SessionManager : IDisposable
         _gamepads = gamepads;
         _tray = tray;
         _sessionWatch = sessionWatch;
+        _scales = scales;
     }
 
     // The application identifier /serverinfo reports, which is how a client chooses between Start
@@ -67,6 +75,37 @@ internal sealed class SessionManager : IDisposable
                 return _session?.AppId ?? 0;
             }
         }
+    }
+
+    // Whether an ANNOUNCE from this address is one this server asked for: it launched or resumed
+    // a moment ago, or it is the client already streaming. Everything else at the RTSP port is
+    // somebody who found the port, and is counted as such.
+    internal bool Expects(IPAddress? address)
+    {
+        if (address is null) return false;
+
+        var asked = Peer.Plain(address);
+
+        lock (_gate)
+        {
+            if (_pending is not null && _pendingFor is not null &&
+                Peer.Plain(_pendingFor).Equals(asked))
+            {
+                return true;
+            }
+
+            return _session is not null &&
+                   Peer.Plain(_session.Negotiation.ClientAddress).Equals(asked);
+        }
+    }
+
+    // Drops the launch waiting to be negotiated and the address it came from, which go together:
+    // an address kept past its launch would let the next connection from it through unasked.
+    // Called under _gate.
+    private void Forget()
+    {
+        _pending = null;
+        _pendingFor = null;
     }
 
     // What is happening right now, in the words the status page uses. Under the same lock as the
@@ -88,7 +127,7 @@ internal sealed class SessionManager : IDisposable
 
     // Records a launch and, when it names a game rather than the desktop, starts it. Returns
     // false with a reason a client can be told.
-    internal bool Launch(LaunchRequest request, out string refusal)
+    internal bool Launch(LaunchRequest request, IPAddress? from, out string refusal)
     {
         refusal = string.Empty;
 
@@ -107,6 +146,7 @@ internal sealed class SessionManager : IDisposable
             }
 
             _pending = request;
+            _pendingFor = from;
         }
 
         // Before anything arranged for the picture: until this there is none, and the mode set
@@ -120,7 +160,7 @@ internal sealed class SessionManager : IDisposable
 
         if (request.AppId != AppParameters.Protocol.DesktopAppId && !StartApplication(request.AppId))
         {
-            lock (_gate) _pending = null;
+            lock (_gate) Forget();
             refusal = "that application could not be started.";
             return false;
         }
@@ -161,7 +201,7 @@ internal sealed class SessionManager : IDisposable
         var output = ResolveOutput();
         if (output is null)
         {
-            lock (_gate) _pending = null;
+            lock (_gate) Forget();
             _tray.SetState("waiting for a client");
             return;
         }
@@ -183,7 +223,7 @@ internal sealed class SessionManager : IDisposable
 
         try
         {
-            var session = new StreamSession(_config, output, _encoder, _gamepads, _tray,
+            var session = new StreamSession(_config, output, _encoder, _gamepads, _tray, _scales,
                 request, negotiation, Ended, target?.Title, poster, GameIsUp,
                 gamePointer: target?.Pointer ?? false,
                 gameQuality: target?.Quality ?? StreamQuality.High,
@@ -192,7 +232,7 @@ internal sealed class SessionManager : IDisposable
             lock (_gate)
             {
                 _session = session;
-                _pending = null;
+                Forget();
             }
 
             session.Start();
@@ -205,7 +245,7 @@ internal sealed class SessionManager : IDisposable
             {
                 _session?.Dispose();
                 _session = null;
-                _pending = null;
+                Forget();
             }
             _tray.SetState("waiting for a client");
         }
@@ -283,7 +323,7 @@ internal sealed class SessionManager : IDisposable
 
     // Reattaches a client to the game already running. Nothing is started; it only accepts the key
     // the returning client brings, so its RTSP negotiation has something to belong to.
-    internal bool Resume(LaunchRequest request, out string refusal)
+    internal bool Resume(LaunchRequest request, IPAddress? from, out string refusal)
     {
         refusal = string.Empty;
 
@@ -305,6 +345,7 @@ internal sealed class SessionManager : IDisposable
             // resuming what is there.
             request = request with { AppId = _watcher.AppId };
             _pending = request;
+            _pendingFor = from;
         }
 
         // As at a launch: a client returning to a running game needs a screen as much as one
@@ -325,6 +366,25 @@ internal sealed class SessionManager : IDisposable
     // Shutting the server down. The stream is taken down and the game is left alone: this
     // machine is going away, which is no reason for someone's game to.
     internal void Shutdown() => Stop(closeTheGame: false);
+
+    // The machine itself is going: to sleep, off, or signed out. Nothing of the stream survives
+    // any of the three — the capture device, the network and this process all go — so it is ended
+    // here, in the seconds Windows gives before it stops running code, and the client is told.
+    // The game stays running and claimed: a machine that wakes finds it there, ready to resume.
+    internal void MachineLeaving(string why)
+    {
+        lock (_gate)
+        {
+            // Nothing streaming and nothing waiting to be negotiated: there is nobody to tell.
+            if (_session is null && _pending is null) return;
+        }
+
+        Log.Event($"the stream is ending: {why}");
+
+        // In place, unlike Ended: this arrives on the thread Windows is waiting on, and whatever
+        // is not finished before it returns is not finished at all.
+        EndStream();
+    }
 
     private void Stop(bool closeTheGame)
     {
@@ -356,9 +416,9 @@ internal sealed class SessionManager : IDisposable
             audio = _audio;
             display = _display;
             _session = null;
-            _pending = null;
             _audio = null;
             _display = null;
+            Forget();
         }
 
         audio?.Dispose();
@@ -426,7 +486,7 @@ internal sealed class SessionManager : IDisposable
 
         var adaptation = DisplayAdaptation.Apply(screen, request.Width, request.Height, request.Fps,
             wantHdr, _encoder.AnyHdr, _config.Adapt, scaleForClient: desktop && _config.ScaleDesktop,
-            isGame: !desktop);
+            _scales, isGame: !desktop);
 
         lock (_gate) _display = adaptation;
     }
@@ -704,11 +764,13 @@ internal sealed class StreamSession : IDisposable
     // Already applied at /launch, from the same mode/hdrMode the negotiation below repeats — null
     // when the client sent neither, in which case CaptureAndEncode adapts the screen itself.
     private readonly DisplayAdaptation? _preAdapted;
+    private readonly ScaleStore _scales;
 
     internal int AppId { get; }
 
     internal StreamSession(AppConfig config, DisplayOutput output, EncoderCapabilities capabilities,
-                           GamepadHub gamepads, TrayIcon tray, LaunchRequest request,
+                           GamepadHub gamepads, TrayIcon tray, ScaleStore scales,
+                           LaunchRequest request,
                            StreamNegotiation negotiation, Action<string> ended,
                            string? gameTitle = null, string? posterPath = null,
                            Func<bool>? gameIsUp = null, bool gamePointer = false,
@@ -718,6 +780,7 @@ internal sealed class StreamSession : IDisposable
         _config = config;
         _output = output;
         _preAdapted = preAdapted;
+        _scales = scales;
         _capabilities = capabilities;
         _gamepads = gamepads;
         _tray = tray;
@@ -780,10 +843,16 @@ internal sealed class StreamSession : IDisposable
 
 
         // Rumble travels back over the same channel. The bus reports a motor in one byte and the
-        // protocol carries two: 257 maps 0xFF onto 0xFFFF rather than 0xFF00.
-        _rumble = feedback => _control.SendRumble((ushort)feedback.Index,
-            (ushort)(feedback.LowFrequencyMotor * 257),
-            (ushort)(feedback.HighFrequencyMotor * 257));
+        // protocol carries two: 257 maps 0xFF onto 0xFFFF rather than 0xFF00. Not at all to a
+        // client that turned haptics off: it asked for its controller to stay still.
+        _rumble = feedback =>
+        {
+            if (!_input.HapticsEnabled) return;
+
+            _control.SendRumble((ushort)feedback.Index,
+                (ushort)(feedback.LowFrequencyMotor * 257),
+                (ushort)(feedback.HighFrequencyMotor * 257));
+        };
 
         _gamepads.Feedback += _rumble;
     }
@@ -850,7 +919,8 @@ internal sealed class StreamSession : IDisposable
             // mode/hdrMode there; otherwise done here, same as it always was.
             display = _preAdapted ?? DisplayAdaptation.Apply(_output, _negotiation.Width,
                 _negotiation.Height, _negotiation.Fps, hdr, _capabilities.AnyHdr, _config.Adapt,
-                scaleForClient: desktop && _config.ScaleDesktop, isGame: !desktop);
+                scaleForClient: desktop && _config.ScaleDesktop,
+                _scales, isGame: !desktop);
 
             _input.SetScreen(display.Bounds);
 

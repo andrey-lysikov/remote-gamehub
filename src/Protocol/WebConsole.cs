@@ -25,6 +25,7 @@ internal sealed class WebConsole : IAsyncDisposable
     private readonly HostIdentity _identity;
     private readonly PairingManager _pairing;
     private readonly ClientStore _clients;
+    private readonly AccessGuard _guard;
     private readonly GameLibrary _games;
     private readonly SessionManager _sessions;
     private readonly GamepadHub _gamepads;
@@ -42,15 +43,16 @@ internal sealed class WebConsole : IAsyncDisposable
     internal Action<string>? Rescan { get; set; }
 
     internal WebConsole(AppConfig config, HostIdentity identity, PairingManager pairing,
-                        ClientStore clients, GameLibrary games, SessionManager sessions,
-                        EncoderCapabilities encoder, UpdateChecker updates,
-                        GamepadHub gamepads, string directory)
+                        ClientStore clients, AccessGuard guard, GameLibrary games,
+                        SessionManager sessions, EncoderCapabilities encoder,
+                        UpdateChecker updates, GamepadHub gamepads, string directory)
     {
         _config = config;
         _gamepads = gamepads;
         _identity = identity;
         _pairing = pairing;
         _clients = clients;
+        _guard = guard;
         _games = games;
         _sessions = sessions;
         _encoder = encoder;
@@ -380,6 +382,23 @@ internal sealed class WebConsole : IAsyncDisposable
             return;
         }
 
+        if (request.Query("blocked") is not null)
+        {
+            await WriteAsync(stream, 200, "text/html; charset=utf-8", BlockedList());
+            return;
+        }
+
+        // The button beside a refused address. It takes the address rather than a row number:
+        // there is no table of these that outlives the run, only the count itself.
+        if (request.Query("unblock") is { } toRelease)
+        {
+            await WriteAsync(stream, 200, "text/plain",
+                _guard.Release(toRelease)
+                    ? "Let back in."
+                    : "That address is not being refused.");
+            return;
+        }
+
         await WriteAsync(stream, 200, "text/html; charset=utf-8", Page());
     }
 
@@ -482,141 +501,95 @@ internal sealed class WebConsole : IAsyncDisposable
         return html.ToString();
     }
 
+    // How much of a block is left, in the words a line has room for. Blocks run from minutes to
+    // most of a day once an address has earned a few in a row, so both ends are worth saying.
+    private static string Remaining(TimeSpan left) => left.TotalMinutes switch
+    {
+        < 1 => "under a minute left",
+        < 60 => $"{left.TotalMinutes:0} min left",
+        _ => $"{(int)left.TotalHours} h {left.Minutes} min left",
+    };
+
+    // The addresses being refused right now, the busiest three of them. Only while the ports are
+    // forwarded: with nothing forwarded nothing outside can knock, and a count of nobody is noise.
+    private string BlockedList()
+    {
+        if (!_guard.IsOn) return string.Empty;
+
+        var blocked = _guard.Blocked();
+        var shown = Math.Min(3, blocked.Count);
+
+        // The heading and the count belong to the list rather than to the section around it, so
+        // that they are replaced together when the page fetches this again.
+        var html = new StringBuilder("<h2>Refused addresses</h2>");
+        html.Append($"<div class=banline>banned {blocked.Count} ip" +
+                    (shown > 0 ? $", top {shown} is:" : string.Empty) + "</div>");
+
+        foreach (var peer in blocked.Take(shown))
+        {
+            html.Append($"<div class=client data-ip=\"{Escape(peer.Address)}\">");
+            html.Append($"<b>{Escape(peer.Address)}</b>");
+
+            // The run of blocks is only worth a word once there has been more than one: it is
+            // what says this address will be refused for longer and longer.
+            html.Append($"<span class=q>{peer.Attempts} attempts · {Remaining(peer.Left)}" +
+                        (peer.Blocks > 1 ? $" · {peer.Blocks} blocks in a row" : string.Empty) +
+                        "</span>");
+
+            html.Append($"<button data-do=unblock title=\"Let back in\" class=danger>" +
+                        $"{TrashIcon}</button>");
+            html.Append("</div>");
+        }
+
+        return html.ToString();
+    }
+
     // ------------------------------------------------------------------ the page
 
     private string Page()
     {
         var waiting = _pairing.WaitingFor;
 
-        var body = new StringBuilder();
-        body.Append($"<!doctype html><html data-theme=\"{ThemeName()}\"><meta charset=\"utf-8\">");
-        body.Append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
-        body.Append($"<title>{AppParameters.Identity.DisplayName}</title>");
-        body.Append(Style);
-        // The header is the icon beside two lines: the name, the version and the project's
-        // address, and under them what the server is doing now. The icon is as tall as both.
-        body.Append("<header><img id=mark src=\"/?icon=1\" alt=\"\"><div><div class=titlerow><h1>" +
-                    $"{AppParameters.Identity.DisplayName} <span class=v>v{Program.Version}</span>" +
-                    "</h1><span class=meta id=host>");
-        body.Append(HostLine());
-        body.Append("</span><span class=\"meta gh\">" +
-                    $"<a href=\"{AppParameters.Links.Project}\" target=_blank rel=noopener>GitHub</a>" +
-                    "</span></div><p id=status>");
-        body.Append(Status());
-        body.Append("</p></div></header>");
+        // One pass over Web/page.html, which is where everything about how this looks now lives.
+        // The lists are drawn here rather than in the browser so that the first paint is the whole
+        // page: somebody opening this to read the log should not watch it assemble itself.
+        return WebAssets.Fill(WebAssets.Part("page"),
+            ("theme", ThemeName()),
+            ("name", AppParameters.Identity.DisplayName),
+            ("version", Program.Version),
+            ("project", AppParameters.Links.Project),
+            ("style", WebAssets.Style),
+            ("script", WebAssets.Script),
+            ("host", HostLine()),
+            ("status", Status()),
 
-        // Written into every page, shown or hidden: a client can start pairing a second after the
-        // page was drawn. Both fields are sent together on Save, and the name is what is listed.
-        body.Append($"<section id=pair class=\"card{(waiting is null ? " off" : string.Empty)}\">");
-        body.Append("<p id=who>");
-        body.Append(waiting is null ? string.Empty : WhoIsPairing(waiting));
-        body.Append("</p>");
-        body.Append("<label>What to call this device" +
-                    "<input id=devname maxlength=48 autocomplete=off placeholder=\"Living-room TV, " +
-                    "Anna's phone…\"></label>");
-        body.Append("<label>The four digits it is showing" +
-                    "<input id=pin inputmode=numeric maxlength=4 autocomplete=off></label>");
-        body.Append("<div class=row><button id=pairsave class=primary>Save</button>" +
-                    "<button id=paircancel>Cancel</button>" +
-                    "<span id=said class=q></span></div></section>");
+            // The pairing card is written into every page and hidden, because a client can start
+            // pairing a second after the page was drawn.
+            ("pairclass", waiting is null ? " off" : string.Empty),
+            ("who", waiting is null ? string.Empty : WhoIsPairing(waiting)),
 
-        // Only when the start-up check found the host unreachable after a restart: what that
-        // means, what it costs to change, and the button that opens Windows' own window for it.
-        if (AutoLogon.Last is { State: AutoLogon.State.Off } off && AutoLogonState() == "off")
-        {
-            body.Append("<section id=autologon class=card>" +
-                        "<p><b>Windows does not sign you in by itself.</b> Your account has a " +
-                        "password, so after a restart this host cannot be reached until somebody " +
-                        "signs in at the machine.</p>" +
-                        $"<p>Windows can sign <b>{Escape(off.Account)}</b> in automatically. The " +
-                        "password is typed into Windows' own settings window and kept by Windows; " +
-                        "this server never sees it. Understand what that means first: anybody who " +
-                        "switches the machine on lands on that desktop without a password, and a " +
-                        "BitLocker drive with no start-up PIN unlocks on its own with it. Locking " +
-                        "the screen right after sign-in keeps the machine shut while this host " +
-                        "stays reachable: the lock screen is streamed and unlocked from the client.</p>" +
-                        "<div class=row><button id=alopen class=primary>Open Windows sign-in " +
-                        "settings</button><span id=alsaid class=q></span></div></section>");
-        }
+            ("autologon", AutoLogonCard()),
+            ("games", GamesList()),
+            ("clients", ClientsList()),
 
-        // Above the list, because it is about the whole list rather than about any tile in it.
-        // The same thing the tray menu does, put where somebody looking at the games already is.
-        body.Append("<div class=\"row end\" id=gamestools>" +
-                    "<span id=scansaid class=q></span>" +
-                    "<button id=rescan>Rescan games</button></div>");
+            // Only while the ports are forwarded: with nothing forwarded nobody outside can knock,
+            // and a list of who was turned away is a list of nobody.
+            ("blockedbox", _guard.IsOn
+                ? WebAssets.Fill(WebAssets.Part("blocked"), ("blocked", BlockedList()))
+                : string.Empty),
 
-        body.Append("<div id=games>");
-        body.Append(GamesList());
-        body.Append("</div>");
+            // Not offered at all once the virtual cursor is off in the configuration file.
+            ("pointer", _config.VirtualMouse ? WebAssets.Part("pointer") : string.Empty),
 
-        // The paired devices, under the games: this server admits the first client that asks, so
-        // the list is the only account of who can reach this screen and the only place to end it.
-        body.Append("<section id=clientsbox><div id=clients>");
-        body.Append(ClientsList());
-        body.Append("</div></section>");
-
-        // One window for adding and editing, and a real dialog rather than a panel: the browser
-        // takes care of the backdrop, of Escape, and of keeping the keyboard inside it.
-        body.Append("<dialog id=editor><form method=dialog>" +
-                    "<h2 id=editortitle>Edit</h2>" +
-                    "<label>Name<input id=title placeholder=\"As it should appear\"></label>" +
-                    "<label>Starts with<input id=command placeholder=\"A file, a shortcut, or " +
-                    "steam://rungameid/…\"></label>" +
-                    "<label>From this folder <span class=hint>optional — many games look for their " +
-                    "own files beside it</span>" +
-                    "<input id=folder placeholder=\"C:\\Games\\Something\"></label>" +
-
-                    // On for the few games that draw no pointer of their own; not offered at all
-                    // once the virtual cursor is off in the configuration file.
-                    (_config.VirtualMouse
-                        ? "<label class=switch><input type=checkbox id=pointer>" +
-                          "<span>Enable software mouse cursor</span></label>"
-                        : string.Empty) +
-
-                    // On by default, unlike the pointer above. Named startcard: the pairing
-                    // section below already claims the id "card" for itself.
-                    "<label class=switch><input type=checkbox id=startcard checked>" +
-                    "<span>Show splash screen when game is starting</span></label>" +
-
-                    // A fast game wants the encoder to finish early; a quiet one can afford the
-                    // time. A client from outside this network is given one level less than this.
-                    "<label>Quality <span class=hint>lower for fast games, higher for quiet " +
-                    "ones — a remote client drops one level</span>" +
-                    "<select id=quality><option value=0>Low</option>" +
-                    "<option value=1>Medium</option><option value=2>High</option>" +
-                    "<option value=3>Lossless</option></select></label>" +
-                    "<div id=coverbox><label>Cover" +
-                    "<span class=row><button type=button id=find>Find by name</button>" +
-                    "<label class=upload>Upload<input type=file accept=\"image/*\" hidden id=file>" +
-                    "</label></span></label>" +
-
-                    "<label>Or the address of a picture " +
-                    "<span class=hint>any format — it is fetched and converted here</span>" +
-                    "<span class=row><input id=arturl placeholder=\"https://…/poster.webp\">" +
-                    "<button type=button id=fetch>Fetch</button></span></label></div>" +
-                    "<p id=editorsaid class=q></p>" +
-                    "<div class=\"row end\"><button type=button id=cancel>Cancel</button>" +
-                    "<button type=button id=save class=primary>Save</button></div>" +
-                    "</form></dialog>");
-
-        // The picker, over the editor: the name stays editable, because a game is installed under
-        // one name and sold under another. A click chooses; a click outside closes.
-        body.Append("<dialog id=picker>" +
-                    "<div class=row><input id=pickname placeholder=\"The name to look for\">" +
-                    "<button type=button id=picksearch class=primary>Search</button></div>" +
-                    "<p id=picksaid class=q></p>" +
-                    "<div id=pickgrid></div>" +
-                    "</dialog>");
-
-        // A drawer along the bottom, shut to begin with and opening upwards over the full width,
-        // leaving the page where it was rather than pushing it about.
-        body.Append("<footer id=logbox><pre id=log>");
-        body.Append(Escape(ReadLogTail()));
-        body.Append("</pre><button id=logtoggle>Log</button></footer>");
-
-        body.Append(Script);
-        return body.ToString();
+            ("log", Escape(ReadLogTail())));
     }
+
+    // Only when the start-up check found the host unreachable after a restart: what that means,
+    // what it costs to change, and the button that opens Windows' own window for it.
+    private static string AutoLogonCard() =>
+        AutoLogon.Last is { State: AutoLogon.State.Off } off && AutoLogonState() == "off"
+            ? WebAssets.Fill(WebAssets.Part("autologon"), ("account", Escape(off.Account)))
+            : string.Empty;
 
     // "on" or "off" from the registry alone, which is cheap enough to answer a poll with; a
     // refusal to read counts as off, so the offer stays on the page rather than vanishing.
@@ -835,395 +808,9 @@ internal sealed class WebConsole : IAsyncDisposable
     private const string PlusIcon =
         "<svg viewBox=\"0 0 24 24\" class=big aria-hidden=true><path d=\"M12 5v14M5 12h14\"/></svg>";
 
-    // The stylesheet, in two palettes: every colour is a variable, written only in the two sets
-    // below, and the root's data-theme attribute chooses between them.
-    private const string Style =
-        "<style>" +
-        // Light: Windows 11's own greys, a white field on a grey ground, green for what is live.
-        ":root{color-scheme:light;--bg:#f3f3f3;--panel:#fbfbfb;--line:#e2e2e2;--ink:#1a1a1a;" +
-        "--dim:#5f5f5f;--faint:#8a8a8a;--fainter:#c4c4c4;--field:#fff;--field-line:#c9c9c9;" +
-        "--button:#fbfbfb;--button-hover:#eaeaea;--button-line:#cfcfcf;--button-line-hover:#a8a8a8;" +
-        "--glass:rgba(251,251,251,.85);--primary:#dff0e2;--primary-line:#8cc79a;--primary-hover:#cfe8d4;" +
-        "--danger-line:#d99;--danger-bg:#fbe9e9;--live:#2a7f3f;--warn:#b8620a;--green-line:#7fb98a;" +
-        "--update-hover:#e6f4e9;--log-bg:#fafafa;--log-ink:#333;--none-ink:#9a9a9a;" +
-        "--pin-field:#fff;--pin-line:#b0b0b0;--pin-ink:#111;--backdrop:rgba(0,0,0,.35);" +
-        "--add-hover-ink:#333;--meta-link:#6a6a6a}" +
-        // Dark: the palette the page was first drawn in.
-        ":root[data-theme=dark]{color-scheme:dark;--bg:#101010;--panel:#161616;--line:#262626;" +
-        "--ink:#ddd;--dim:#8a8a8a;--faint:#666;--fainter:#444;--field:#111;--field-line:#3a3a3a;" +
-        "--button:#1c1c1c;--button-hover:#262626;--button-line:#3a3a3a;--button-line-hover:#555;" +
-        "--glass:rgba(16,16,16,.82);--primary:#2c4a33;--primary-line:#3d6b47;--primary-hover:#35603d;" +
-        "--danger-line:#844;--danger-bg:#2a1a1a;--live:#7c6;--warn:#d95;--green-line:#3a5;" +
-        "--update-hover:#1a2a1e;--log-bg:#0c0c0c;--log-ink:#bbb;--none-ink:#555;" +
-        "--pin-field:#222;--pin-line:#555;--pin-ink:#eee;--backdrop:rgba(0,0,0,.6);" +
-        "--add-hover-ink:#aaa;--meta-link:#888}" +
-        "*{box-sizing:border-box}" +
-        "body{font:15px/1.5 system-ui,sans-serif;margin:0 auto;padding:1.25rem 1.25rem 4rem;" +
-        // Wide enough for five posters and their gaps, and no wider: past that the grid keeps
-        // adding columns until a poster is a thumbnail again.
-        "max-width:960px;background:var(--bg);color:var(--ink)}" +
-
-        // The header: one line, and it stays put while the grid scrolls under it.
-        "header{position:sticky;top:0;z-index:5;background:var(--bg);padding:.25rem 0 .75rem;" +
-        "border-bottom:1px solid var(--line);margin-bottom:1.25rem;display:flex;gap:.7rem;" +
-        "align-items:center}" +
-        // As tall as the two lines beside it, and not a pixel of the width they need: the icon is
-        // the one thing here that is decoration, so it gives way.
-        "#mark{width:2.7rem;height:2.7rem;flex:none;image-rendering:auto}" +
-        "header>div{min-width:0;flex:1}" +
-        "h1{font-size:1.05rem;margin:0;font-weight:600}" +
-        ".v{color:var(--faint);font-weight:400}" +
-        ".meta{margin-left:.6rem;font-size:12px;font-weight:400;color:var(--faint)}" +
-        ".meta a{color:var(--meta-link);text-decoration:none}" +
-        ".meta a:hover{color:var(--ink);text-decoration:underline}" +
-        "#status{margin:.35rem 0 0;color:var(--dim);font-size:13px;" +
-        "white-space:nowrap;overflow:auto;scrollbar-width:none}" +
-        // Title, host facts and the GitHub link on one row; the facts between the two fixed ends
-        // give way, scrolling rather than wrapping the link onto a line of its own.
-        ".titlerow{display:flex;align-items:baseline;min-width:0}" +
-        ".titlerow h1{flex:none}" +
-        "#host{flex:1;min-width:0;overflow:auto;scrollbar-width:none;white-space:nowrap}" +
-        ".titlerow .gh{flex:none}" +
-        "#status span.live{color:var(--live)}" +
-        // The one link on the host line, and the one thing on the page in a colour of its own:
-        // a newer version is news, and news is allowed to stand out.
-        "#host a.update{color:var(--live);font-weight:600;text-decoration:none;" +
-        "border:1px solid var(--green-line);border-radius:.3rem;padding:.05rem .45rem}" +
-        "#host a.update:hover{background:var(--update-hover)}" +
-        ".dot{color:var(--fainter);margin:0 .15rem}" +
-
-        // The grid: auto-fill with a minimum of about a hundred and forty pixels lands on five or
-        // six columns at an ordinary window and on two on a telephone.
-        "#gamestools{align-items:center;margin:0 0 .6rem}" +
-        "#games{display:grid;gap:1.25rem;grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}" +
-        ".game{background:none;border:0;padding:0;color:inherit;text-align:left;font:inherit}" +
-        // Positions everything pinned to the poster (the tools, the stop button, the running
-        // badge) against the image alone, not against the title and source line under it too.
-        ".poster{position:relative}" +
-        // 3:4, matching the shape CoverArt.ToPng pads every cover to. No border or rounding: the
-        // poster is the tile, not a picture framed inside one.
-        ".art{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:transparent}" +
-        ".art.none{display:grid;place-items:center;color:var(--none-ink);font-size:11px}" +
-        ".game h3{font-size:13px;margin:.5rem 0 0;font-weight:500;line-height:1.3;" +
-        "overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}" +
-        ".game .q{margin:.1rem 0 0;font-size:11px;color:var(--faint)}" +
-
-        // The two marks sit on the poster and appear when it is pointed at. On a touch screen
-        // there is no pointing, so there they are simply always there.
-        ".tools{position:absolute;top:.5rem;right:.5rem;display:flex;gap:.35rem;opacity:0;" +
-        "transition:opacity .12s}" +
-        ".game:hover .tools,.game:focus-within .tools{opacity:1}" +
-        "@media (hover:none){.tools{opacity:1}}" +
-        // Present in every tile, shown only on the running one via a class the poll toggles.
-        // Qualified with the tag: a bare .running also matched the article and hid the tile.
-        "span.running{display:none;position:absolute;right:.4rem;bottom:.4rem;" +
-        "padding:.22rem .55rem;" +
-        "border-radius:.4rem;font-size:15px;font-weight:600;letter-spacing:.02em;" +
-        "background:var(--live);color:var(--bg);box-shadow:0 1px 4px rgba(0,0,0,.35)}" +
-        ".game.running span.running{display:inline-block}" +
-        ".tools button{padding:.3rem;line-height:0;border-radius:.35rem;" +
-        "background:var(--glass);border:1px solid var(--button-line);backdrop-filter:blur(4px)}" +
-        ".tools button:hover{background:var(--button-hover);border-color:var(--button-line-hover)}" +
-        ".tools .danger:hover{border-color:var(--danger-line);background:var(--danger-bg)}" +
-        // Centred on the poster and about three times the size of the small tools. Grey glass at
-        // rest, like them, and only turns to danger red on approach.
-        ".stop{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);" +
-        "width:3.6rem;height:3.6rem;align-items:center;justify-content:center;padding:0;" +
-        "border-radius:50%;border:1px solid var(--button-line);background:var(--glass);" +
-        "color:var(--ink);backdrop-filter:blur(4px);opacity:0;" +
-        "transition:opacity .12s,background .12s,border-color .12s,color .12s}" +
-        // Filled, unlike the other outline icons — the inherited stroke of the same colour is
-        // turned off here, or it blurs into the fill instead of reading as a crisp square.
-        ".stop svg{width:28px;height:28px;fill:currentColor;stroke:none}" +
-        ".game.running .stop{display:flex}" +
-        ".game:hover .stop,.game:focus-within .stop{opacity:1}" +
-        "@media (hover:none){.game.running .stop{opacity:1}}" +
-        ".stop:hover{background:var(--danger-bg);border-color:var(--danger-line);" +
-        "color:var(--danger-line)}" +
-        "svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;" +
-        "stroke-linecap:round;stroke-linejoin:round;display:block}" +
-        "svg.big{width:30px;height:30px;stroke-width:1.5}" +
-
-        // The tile that adds one, shaped like the posters it sits among but with nothing framing
-        // it: no border, no background, on the same bare ground as everything else on the page.
-        ".game.add{display:grid;place-content:center;gap:.4rem;justify-items:center;" +
-        "aspect-ratio:3/4;border:0;background:none;color:var(--faint);cursor:pointer}" +
-        ".game.add:hover{color:var(--add-hover-ink)}" +
-        ".game.add span{font-size:12px}" +
-
-        // The paired devices: rows rather than tiles, because a device is a name and two dates
-        // and nothing worth a picture.
-        "#clients:not(:empty){display:block;margin-top:2rem}" +
-        "#clients h2{font-size:13px;font-weight:500;color:var(--dim);margin:0 0 .6rem}" +
-        ".client{display:flex;align-items:center;gap:.6rem;padding:.55rem .75rem;" +
-        "border:1px solid var(--line);border-radius:.45rem;margin-bottom:.4rem;" +
-        "background:var(--panel)}" +
-        ".client b{font-weight:500;font-size:13px}" +
-        ".client .q{flex:1;font-size:11px;min-height:0}" +
-        ".client button{padding:.3rem;line-height:0}" +
-
-        // Buttons and fields, shared by the dialogs and the pairing card.
-        "button,.upload{font:inherit;font-size:13px;padding:.35rem .8rem;border-radius:.35rem;" +
-        "border:1px solid var(--button-line);background:var(--button);color:var(--ink);cursor:pointer}" +
-        "button:hover,.upload:hover{background:var(--button-hover)}" +
-        "button.primary{background:var(--primary);border-color:var(--primary-line)}" +
-        "button.primary:hover{background:var(--primary-hover)}" +
-        ".row{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center}" +
-        ".row.end{justify-content:flex-end;margin-top:.25rem}" +
-        ".q{color:var(--dim);min-height:1.2em;margin:0}" +
-
-        // The pairing card: green, because it is the one thing on this page that is urgent.
-        ".card{border:1px solid var(--green-line);border-radius:.5rem;padding:1rem;margin-bottom:1.25rem}" +
-        ".card.off{display:none}" +
-        ".card label{display:block;font-size:12px;color:var(--dim);margin:.6rem 0}" +
-        "#devname{display:block;width:min(24rem,100%);margin-top:.3rem;font:inherit;font-size:14px;" +
-        "padding:.45rem .6rem;border-radius:.35rem;border:1px solid var(--field-line);background:var(--field);" +
-        "color:var(--ink)}" +
-        // Wide enough for four digits with room to spare: the letter spacing is charged after the
-        // last digit as well, so a box measured to fit exactly hides the fourth.
-        "#pin{display:block;font:inherit;font-size:2rem;width:10.5rem;margin-top:.3rem;padding:.4rem;" +
-        "text-align:center;letter-spacing:.4em;border-radius:.4rem;border:1px solid var(--pin-line);" +
-        "background:var(--pin-field);color:var(--pin-ink)}" +
-        "#said{margin-left:.5rem}" +
-
-        "dialog{border:1px solid var(--line);border-radius:.6rem;background:var(--panel);" +
-        "color:var(--ink);padding:1.25rem;width:min(30rem,calc(100vw - 2rem))}" +
-        "dialog::backdrop{background:var(--backdrop)}" +
-        "dialog h2{font-size:1rem;margin:0 0 1rem}" +
-        "dialog label{display:block;font-size:12px;color:var(--dim);margin-bottom:.9rem}" +
-        // The browser's own [hidden] loses to the rule above on specificity, and a field that
-        // will not hide is worse than one that was never written.
-        "dialog label[hidden]{display:none}" +
-        ".hint{color:var(--faint)}" +
-        "dialog label.upload{display:inline-block;margin:0}" +
-        // The one switch in the window: the box beside its words rather than above them, which is
-        // what every other checkbox on this machine looks like.
-        "dialog label.switch{display:flex;gap:.5rem;align-items:flex-start;cursor:pointer}" +
-        "dialog label.switch input{width:auto;margin:.15rem 0 0}" +
-        "dialog label.switch span{color:var(--ink)}" +
-        "dialog input[type=text],dialog input:not([type]),dialog select{display:block;width:100%;" +
-        "margin-top:.3rem;font:inherit;font-size:14px;padding:.45rem .6rem;border-radius:.35rem;" +
-        "border:1px solid var(--field-line);background:var(--field);color:var(--ink)}" +
-
-        // A field standing beside a button rather than on its own line: it takes what is left.
-        ".row input{flex:1 1 8rem;width:auto;margin-top:0}" +
-        ".row{margin-top:.3rem}" +
-
-        // The picker: wider than the editor for four posters side by side, no taller than the
-        // window, and four columns exactly whatever the width.
-        "#picker{width:min(46rem,calc(100vw - 2rem));max-height:calc(100vh - 2rem)}" +
-        // Only on the open form: any display on the element itself outranks the display:none a
-        // browser gives a closed dialog, and the window then stands on the page, empty.
-        "#picker[open]{display:flex;flex-direction:column}" +
-        "#picker .row{margin-top:0}" +
-        "#pickname{flex:1;font:inherit;font-size:14px;padding:.45rem .6rem;border-radius:.35rem;" +
-        "border:1px solid var(--field-line);background:var(--field);color:var(--ink)}" +
-        // minmax(0,1fr) rather than 1fr, and min-width on the item for the same reason: a plain
-        // 1fr column may not become narrower than the widest picture, and the grid went off screen.
-        "#pickgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;" +
-        "overflow-y:auto;overflow-x:hidden;min-height:0;padding:.25rem .1rem;margin-top:.5rem}" +
-        ".pick{cursor:pointer;background:none;border:0;padding:0;color:inherit;font:inherit;" +
-        "text-align:left;min-width:0}" +
-        ".pick img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:.4rem;display:block;" +
-        "border:2px solid transparent;background:var(--panel)}" +
-        ".pick:hover img,.pick:focus-visible img{border-color:var(--live)}" +
-        ".pick span{display:block;font-size:11px;color:var(--dim);margin-top:.3rem;overflow:hidden;" +
-        "white-space:nowrap;text-overflow:ellipsis}" +
-
-        // The log: a drawer along the bottom that grows upwards. The page keeps room for the bar
-        // at all times, so nothing is ever hidden behind it.
-        "#logbox{position:fixed;left:0;right:0;bottom:0;z-index:10;display:flex;" +
-        "flex-direction:column;background:var(--log-bg);border-top:1px solid var(--line)}" +
-        "#log{height:0;overflow:auto;margin:0;padding:0 1rem;font-size:12px;color:var(--log-ink);" +
-        "white-space:pre-wrap;word-break:break-word;transition:height .18s ease}" +
-        "#logbox.open #log{height:45vh;padding:1rem}" +
-        "#logtoggle{border:0;border-radius:0;background:none;color:var(--dim);text-align:left;" +
-        "padding:.5rem 1rem;width:100%}" +
-        "#logtoggle:hover{background:var(--panel);color:var(--ink)}" +
-        "#logtoggle::before{content:\"▲ \";font-size:9px;vertical-align:middle}" +
-        "#logbox.open #logtoggle::before{content:\"▼ \"}" +
-        "</style>";
-
-    // The page keeps itself current without reloading: a reload would throw away half-typed
-    // digits, and the one moment this page matters is while somebody is typing them.
-    private const string Script =
-        "<script>" +
-        "const $=id=>document.getElementById(id);" +
-
-        // --- pairing ---
-        "const pin=$('pin'),devname=$('devname'),said=$('said'),card=$('pair'),who=$('who')," +
-        "clients=$('clients');" +
-        "async function reloadClients(){clients.innerHTML=await (await fetch('/?clients=1')).text();}" +
-        "async function sendPin(){" +
-        "if(!/^\\d{4}$/.test(pin.value)){said.textContent='A code is four digits.';pin.focus();return;}" +
-        "said.textContent='sending…';" +
-        "const r=await fetch('/?pin='+encodeURIComponent(pin.value)+'&name='+encodeURIComponent(devname.value));" +
-        "said.textContent=await r.text();pin.value='';" +
-        // The device appears once the client has finished its side. Asked for twice: the exchange
-        // takes a few hundred milliseconds, and one reload can be too early.
-        "setTimeout(reloadClients,1500);setTimeout(reloadClients,5000);}" +
-        "$('pairsave').addEventListener('click',sendPin);" +
-        // Cancel ends the attempt at the host's side. The box goes on its own a moment later,
-        // when the poll below finds nothing waiting any more, so nothing is hidden here.
-        "$('paircancel').addEventListener('click',async()=>{" +
-        "said.textContent='cancelling…';pin.value='';" +
-        "said.textContent=await (await fetch('/?cancelpair=1')).text();});" +
-        "pin.addEventListener('keydown',e=>{if(e.key==='Enter')sendPin();});" +
-        "devname.addEventListener('keydown',e=>{if(e.key==='Enter')pin.focus();});" +
-        "let wasWaiting=!card.classList.contains('off');" +
-        "setInterval(async()=>{" +
-        "const name=await (await fetch('/?waiting=1')).text();" +
-        "const wanted=name.length>0;" +
-        "if(wanted!==wasWaiting){" +
-        "card.classList.toggle('off',!wanted);" +
-        "if(wanted){said.textContent='';devname.focus();}" +
-        // The box has just gone: the attempt ended, one way or the other, and the list below is
-        // where the outcome shows.
-        "else reloadClients();" +
-        "wasWaiting=wanted;}" +
-        "if(wanted)who.innerHTML='A device calling itself <b>'+name.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</b> wants to pair with this machine.';" +
-        "const both=(await (await fetch('/?status=1')).text()).split('\\n');" +
-        "$('host').innerHTML=both[0];$('status').innerHTML=both[1]||'';" +
-        // The badge follows without a page reload: every tile's class is set from the one row
-        // the server says is running, which is cheap enough to do on every tick of this poll.
-        "document.querySelectorAll('#games .game').forEach(el=>" +
-        "el.classList.toggle('running',el.dataset.id===(both[2]||'')));" +
-        // The palette follows the machine, not the browser: the attribute the stylesheet keys on
-        // is refreshed with the rest, so a theme flipped in Settings reaches the page in a second.
-        "const theme=(await (await fetch('/?theme=1')).text()).trim();" +
-        "if(theme&&document.documentElement.dataset.theme!==theme)document.documentElement.dataset.theme=theme;" +
-        "},1000);" +
-        "if(!card.classList.contains('off'))devname.focus();" +
-
-        // --- automatic sign-in: the button opens Windows' window on the machine, and the page
-        // then asks every few seconds whether the switch was made there ---
-        "const al=$('autologon');if(al){$('alopen').addEventListener('click',async e=>{" +
-        "e.target.disabled=true;" +
-        "$('alsaid').textContent=await (await fetch('/?autologon=setup')).text();" +
-        "const until=Date.now()+600000;const poll=setInterval(async()=>{" +
-        "if(Date.now()>until){clearInterval(poll);e.target.disabled=false;return;}" +
-        "if((await (await fetch('/?autologon=state')).text()).trim()==='on'){clearInterval(poll);" +
-        "al.innerHTML='<p>Automatic sign-in is on now. This host comes back on its own after a restart.</p>';}" +
-        "},5000);});}" +
-
-        // --- the log drawer ---
-        "const logbox=$('logbox'),log=$('log');" +
-        "$('logtoggle').addEventListener('click',()=>{logbox.classList.toggle('open');" +
-        "if(logbox.classList.contains('open'))log.scrollTop=log.scrollHeight;});" +
-        // Only while it is open: sixty-four kilobytes every three seconds into a shut drawer is
-        // work for nobody.
-        "setInterval(async()=>{if(!logbox.classList.contains('open'))return;" +
-        "const atEnd=log.scrollTop+log.clientHeight>=log.scrollHeight-8;" +
-        "log.textContent=await (await fetch('/?log=1')).text();" +
-        "if(atEnd)log.scrollTop=log.scrollHeight;},3000);" +
-
-        // --- the editor ---
-        "const games=$('games'),editor=$('editor'),title=$('title'),command=$('command'),folder=$('folder')," +
-        "editorsaid=$('editorsaid'),coverbox=$('coverbox'),arturl=$('arturl');" +
-        "let editing=0;" +
-        "async function reload(){games.innerHTML=await (await fetch('/?games=1')).text();}" +
-        // Rescan. The answer says only that the scan started, so the list is fetched twice
-        // afterwards: a library of a hundred games takes a few seconds.
-        "const scansaid=$('scansaid');" +
-        "$('rescan').addEventListener('click',async e=>{const b=e.target;b.disabled=true;" +
-        "scansaid.textContent=await (await fetch('/?rescan=1')).text();" +
-        "setTimeout(reload,2000);" +
-        "setTimeout(()=>{reload();scansaid.textContent='';b.disabled=false;},6000);});" +
-        "function open(id,name,starts,from,pointerOn,level,cardOn){editing=id;" +
-        "$('editortitle').textContent=id?'Edit game':'Add a game';" +
-        "title.value=name||'';command.value=starts||'';folder.value=from||'';" +
-        "quality.value=level===undefined?2:level;" +
-        "if(window.pointer)pointer.checked=pointerOn==='1';" +
-        "startcard.checked=cardOn!=='0';" +
-        "editorsaid.textContent='';" +
-        // A game that does not exist yet has nowhere to put a cover, so that half of the window is
-        // shown only once there is a row to attach one to.
-        "coverbox.style.display=id?'':'none';" +
-        "arturl.value='';" +
-        "editor.showModal();title.focus();}" +
-        "$('cancel').addEventListener('click',()=>editor.close());" +
-        "$('save').addEventListener('click',async()=>{" +
-        "if(!title.value.trim()||!command.value.trim()){" +
-        "editorsaid.textContent='A game needs a name and something to start.';return;}" +
-        "const r=await fetch('/?save='+editing+'&title='+encodeURIComponent(title.value)+" +
-        "'&command='+encodeURIComponent(command.value)+" +
-        "'&folder='+encodeURIComponent(folder.value)+" +
-        "'&pointer='+(window.pointer&&pointer.checked?1:0)+'&quality='+quality.value+" +
-        "'&card='+(startcard.checked?1:0));" +
-        "editorsaid.textContent=await r.text();await reload();editor.close();});" +
-        // --- the cover picker ---
-        // Searched at once for the editor's name; a portrait that does not exist falls back once.
-        "const picker=$('picker'),pickname=$('pickname'),pickgrid=$('pickgrid')," +
-        "picksaid=$('picksaid');" +
-        "async function search(){const name=pickname.value.trim();" +
-        "if(!name){picksaid.textContent='Type a name to look for.';pickname.focus();return;}" +
-        "picksaid.textContent='looking…';pickgrid.innerHTML='';" +
-        "const found=await (await fetch('/?artlist=1&title='+encodeURIComponent(name))).json();" +
-        "const none='Nothing with a picture was found under \"'+name+'\". " +
-        "Try the name a store would use.';" +
-        "if(!found.length){picksaid.textContent=none;return;}" +
-        // Counted again whenever one drops out, because the count is written before a single
-        // picture has loaded and the answer is only true once they have.
-        "const count=()=>{const n=pickgrid.children.length;" +
-        "picksaid.textContent=n?n+' found — click the right one':none;};" +
-        "count();" +
-        "for(const c of found){const b=document.createElement('button');b.type='button';b.className='pick';" +
-        "b.title=c.name;" +
-        "const img=document.createElement('img');img.loading='lazy';img.alt='';img.src=c.src;" +
-        // Out of the window rather than shown as an empty frame: an entry whose portrait answers
-        // 404 has no cover to choose, and there is nothing else here worth offering instead.
-        "img.onerror=()=>{b.remove();count();};" +
-        "const cap=document.createElement('span');cap.textContent=c.name;" +
-        "b.append(img,cap);pickgrid.append(b);}" +
-        "count();}" +
-        "$('find').addEventListener('click',()=>{pickname.value=title.value.trim();" +
-        "picksaid.textContent='';pickgrid.innerHTML='';picker.showModal();search();});" +
-        "$('picksearch').addEventListener('click',search);" +
-        "pickname.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();search();}});" +
-        // A click on a picture chooses it; a click on the backdrop — the dialog element itself,
-        // outside its box — closes the window.
-        "pickgrid.addEventListener('click',async e=>{const b=e.target.closest('.pick');if(!b)return;" +
-        "const img=b.querySelector('img');if(!img)return;" +
-        "picksaid.textContent='fetching…';" +
-        // The address of the picture on screen, not the entry's number: after the fallback above
-        // the two can differ, and what is stored should be the picture that was clicked.
-        "const r=await fetch('/?arturl='+editing+'&url='+" +
-        "encodeURIComponent(img.currentSrc||img.src));" +
-        "editorsaid.textContent=await r.text();picker.close();await reload();});" +
-        "picker.addEventListener('click',e=>{if(e.target===picker)picker.close();});" +
-        "$('fetch').addEventListener('click',async()=>{" +
-        "editorsaid.textContent='fetching…';" +
-        "const r=await fetch('/?arturl='+editing+'&url='+encodeURIComponent(arturl.value));" +
-        "editorsaid.textContent=await r.text();await reload();});" +
-        "$('file').addEventListener('change',async e=>{" +
-        "if(!e.target.files.length)return;editorsaid.textContent='uploading…';" +
-        "const r=await fetch('/?upload='+editing,{method:'POST',body:e.target.files[0]});" +
-        "editorsaid.textContent=await r.text();e.target.value='';await reload();});" +
-
-        // Every tile is handled here rather than each on its own, so that the grid can be replaced
-        // whole after a change without anything being wired up again.
-        "games.addEventListener('click',async e=>{" +
-        "if(e.target.closest('#addtile')){open(0);return;}" +
-        "const button=e.target.closest('button[data-do]');if(!button)return;" +
-        "const tile=button.closest('.game');" +
-        "if(button.dataset.do==='edit'){open(tile.dataset.id,tile.dataset.title,tile.dataset.command," +
-        "tile.dataset.folder,tile.dataset.pointer,tile.dataset.quality,tile.dataset.card);return;}" +
-        "if(button.dataset.do==='remove'){" +
-        "if(!confirm('Remove '+tile.dataset.title+' from the list?'))return;" +
-        "await fetch('/?remove='+tile.dataset.id);await reload();return;}" +
-        "if(button.dataset.do==='stop'){" +
-        "if(!confirm('Stop '+tile.dataset.title+'?'))return;" +
-        "await fetch('/?stop=1');await reload();}});" +
-
-        // The paired devices, the same way. Forgetting one is asked about first: it is the one
-        // thing here that somebody else has to undo, by pairing their device again.
-        "clients.addEventListener('click',async e=>{" +
-        "const button=e.target.closest('button[data-do=forget]');if(!button)return;" +
-        "const row=button.closest('.client');" +
-        "if(!confirm('Forget '+row.dataset.name+'? It will have to pair again.'))return;" +
-        "await fetch('/?forget='+row.dataset.id);" +
-        "await reloadClients();});" +
-        "</script>";
+    // The stylesheet and the script live in Web/page.css and Web/page.js, built into this
+    // executable and read through WebAssets. They are markup, not C#, and an editor that
+    // knows that is worth more than a string literal the compiler only counts quotes in.
 
     public async ValueTask DisposeAsync()
     {

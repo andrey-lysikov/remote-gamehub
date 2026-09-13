@@ -184,6 +184,13 @@ internal static class AppParameters
         internal const int MinFps = 10;
         internal const int MaxFps = 240;
 
+        // Failed pairing attempts from one address outside this network before it is refused, and
+        // how long the refusal lasts. Zero attempts is the switch that turns the whole thing off.
+        internal const int MinBlockAfterFailures = 0;
+        internal const int MaxBlockAfterFailures = 100;
+        internal const int MinBlockMinutes = 1;
+        internal const int MaxBlockMinutes = 24 * 60;
+
         // How deep the optional games folder may be walked. Past eight levels a mistyped path
         // pointed at a drive root would turn the scan into a disk crawl.
         internal const int MinGamesFolderDepth = 1;

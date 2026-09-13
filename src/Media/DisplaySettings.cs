@@ -23,6 +23,7 @@ internal sealed class DisplayAdaptation : IDisposable
     private readonly DisplayMode? _previousMode;
     private bool? _previousHdr;
     private readonly int? _previousScale;
+    private readonly ScaleStore _scales;
     private bool _restored;
 
     // The screen's rectangle as it is now, which is what the mouse must be mapped onto.
@@ -34,20 +35,23 @@ internal sealed class DisplayAdaptation : IDisposable
         string.Equals(_deviceName, output.DeviceName, StringComparison.Ordinal);
 
     private DisplayAdaptation(string deviceName, Rect bounds, DisplayMode? previousMode,
-                              bool? previousHdr, int? previousScale)
+                              bool? previousHdr, int? previousScale, ScaleStore scales)
     {
         _deviceName = deviceName;
         Bounds = bounds;
         _previousMode = previousMode;
         _previousHdr = previousHdr;
         _previousScale = previousScale;
+        _scales = scales;
     }
 
     // Adapts the screen as far as it can and returns what puts it back. Never throws: a screen
     // that would not change is a stream at the wrong size, which is worth a warning and no more.
+    // scales is where the replaced desktop scale is kept until it is put back.
     internal static DisplayAdaptation Apply(DisplayOutput output, int width, int height, int fps,
                                             bool wantHdr, bool canEncodeHdr, bool enabled,
-                                            bool scaleForClient, bool isGame = false)
+                                            bool scaleForClient, ScaleStore scales,
+                                            bool isGame = false)
     {
         var name = output.DeviceName;
         DisplayMode? previousMode = null;
@@ -67,13 +71,13 @@ internal sealed class DisplayAdaptation : IDisposable
                 {
                     // By the size the client asked for, not the mode the screen landed on: up to 2K
                     // the desktop is at 100%, above it scaled, whatever the screen managed.
-                    previousScale = ApplyScale(name, width, height);
+                    previousScale = ApplyScale(name, width, height, scales);
                 }
                 else if (isGame)
                 {
                     // Always 100%, whatever an earlier desktop stream left: a game reading a stale
                     // scale draws its UI and cursor wrong for as long as it runs.
-                    previousScale = ForceScale100(name);
+                    previousScale = ForceScale100(name, scales);
                 }
             }
             else
@@ -87,7 +91,7 @@ internal sealed class DisplayAdaptation : IDisposable
         }
 
         return new DisplayAdaptation(name, CurrentBounds(output), previousMode, previousHdr,
-                                     previousScale);
+                                     previousScale, scales);
     }
 
     // 1920x1080: the size desktop UI is drawn for, and what a client above 2K is measured
@@ -102,7 +106,8 @@ internal sealed class DisplayAdaptation : IDisposable
 
     // Sets the desktop scale for the client's size: 100% within 2K, above it the extra pixels over
     // the ordinary desktop stepped to 25%, always from 100%. Returns the setting replaced or null.
-    private static int? ApplyScale(string deviceName, int clientWidth, int clientHeight)
+    private static int? ApplyScale(string deviceName, int clientWidth, int clientHeight,
+                                   ScaleStore scales)
     {
         if (clientWidth <= 0 || clientHeight <= 0) return null;
 
@@ -124,8 +129,12 @@ internal sealed class DisplayAdaptation : IDisposable
 
         if (wanted == scale.Value.Current) return null;
 
+        // Written before the change, so a shutdown the moment after it still finds it.
+        var original = scales.Remember(deviceName, scale.Value.Current);
+
         if (!DisplayControl.SetDpiScale(path.Value, wanted))
         {
+            if (original == scale.Value.Current) scales.Forget(deviceName);
             Log.Info($"the desktop could not be scaled to {wanted}% for this client");
             return null;
         }
@@ -133,19 +142,19 @@ internal sealed class DisplayAdaptation : IDisposable
         if (fitsUnscaled)
             Log.Event($"the client's {clientWidth}x{clientHeight} is within {UnscaledWidth}x" +
                      $"{UnscaledHeight}, so the desktop is put to 100% for this stream; it was " +
-                     $"{scale.Value.Current}% and goes back to that afterwards");
+                     $"{scale.Value.Current}% and goes back to {original}% afterwards");
         else
             Log.Event($"the client's {clientWidth}x{clientHeight} is " +
                      $"{ratio.ToString("0.00", CultureInfo.InvariantCulture)} times {ReferenceWidth}x" +
                      $"{ReferenceHeight}, so the desktop is scaled to {wanted}% for this stream; it " +
-                     $"was {scale.Value.Current}% and goes back to that afterwards");
+                     $"was {scale.Value.Current}% and goes back to {original}% afterwards");
 
-        return scale.Value.Current;
+        return original;
     }
 
     // A game gets none of the above: whatever the desktop stream before it left the scale at,
     // put back to 100% before this one reads it. Returns the setting replaced or null.
-    private static int? ForceScale100(string deviceName)
+    private static int? ForceScale100(string deviceName, ScaleStore scales)
     {
         var path = FindPath(deviceName);
         if (path is null) return null;
@@ -155,16 +164,19 @@ internal sealed class DisplayAdaptation : IDisposable
 
         if (scale.Value.Current == 100) return null;
 
+        var original = scales.Remember(deviceName, scale.Value.Current);
+
         if (!DisplayControl.SetDpiScale(path.Value, 100))
         {
+            if (original == scale.Value.Current) scales.Forget(deviceName);
             Log.Info("the desktop could not be scaled back to 100% for this game");
             return null;
         }
 
         Log.Event($"the desktop was at {scale.Value.Current}% from an earlier stream; " +
-                 "put back to 100% for this game, and will return to that afterwards");
+                 $"put back to 100% for this game, and will return to {original}% afterwards");
 
-        return scale.Value.Current;
+        return original;
     }
 
     // The percentage Windows offers nearest the one wanted, stepped in the usual 25%, never below
@@ -180,6 +192,49 @@ internal sealed class DisplayAdaptation : IDisposable
         }
 
         return best;
+    }
+
+    // At startup: puts back a desktop scale that a stream changed and never restored, because the
+    // machine was shut down or this server ended in the middle of it. Never throws.
+    internal static void RestoreLeftoverScales(ScaleStore scales)
+    {
+        foreach (var (deviceName, percent) in scales.All())
+        {
+            try
+            {
+                var path = FindPath(deviceName);
+                if (path is null)
+                {
+                    // Kept: the screen may only be switched off, and the next start tries again.
+                    Log.Info($"a stream left the desktop of {deviceName} scaled, and that screen is " +
+                             $"not active now; it is put back to {percent}% at a later start");
+                    continue;
+                }
+
+                var scale = DisplayControl.DpiScale(path.Value);
+                if (scale is null) continue;
+
+                if (scale.Value.Current != percent)
+                {
+                    if (!DisplayControl.SetDpiScale(path.Value, percent))
+                    {
+                        Log.Warn($"a stream that did not end left the desktop at " +
+                                 $"{scale.Value.Current}%, and it could not be put back to {percent}%");
+                        continue;
+                    }
+
+                    Log.Event($"a stream that did not end left the desktop at {scale.Value.Current}%; " +
+                              $"it is put back to {percent}%");
+                }
+
+                scales.Forget(deviceName);
+            }
+            catch (Exception error)
+            {
+                Log.Warn($"the desktop scale a stream left on {deviceName} could not be restored: " +
+                         error.Message);
+            }
+        }
     }
 
     // Changes the mode when a closer one exists, and answers with the one that was replaced —
@@ -467,7 +522,10 @@ internal sealed class DisplayAdaptation : IDisposable
                 var step = Stopwatch.StartNew();
                 var path = FindPath(_deviceName);
                 if (path is not null && DisplayControl.SetDpiScale(path.Value, scale))
+                {
+                    _scales.Forget(_deviceName);
                     Log.Info($"the desktop is scaled back to {scale}% in {step.ElapsedMilliseconds} ms");
+                }
                 else
                     Log.Warn($"the desktop could not be scaled back to {scale}% " +
                              $"({step.ElapsedMilliseconds} ms)");

@@ -2,10 +2,12 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Formats.Asn1;
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Xml.Linq;
+using RemoteGameHub.App;
 using RemoteGameHub.Library;
 using RemoteGameHub.Protocol;
 using Xunit;
@@ -67,7 +69,10 @@ public class PairingTests
             Database = Database.Open(Folder.Path);
             Clients = new ClientStore(Database);
             Identity = HostIdentity.Load(Folder.Path, "Test host");
-            Pairing = new PairingManager(Identity, Clients);
+
+            // A guard over a configuration with no forwarding: it watches nobody, which is what
+            // these tests are about — the exchange itself, on a network of its own.
+            Pairing = new PairingManager(Identity, Clients, new AccessGuard(new AppConfig()));
         }
 
         internal async Task<XElement> Ask(Client client, string query)
@@ -76,7 +81,7 @@ public class PairingTests
                 $"GET /pair?uniqueid={client.UniqueId}&{query} HTTP/1.1\r\nHost: x\r\n\r\n")),
                 CancellationToken.None);
 
-            var answer = await Pairing.HandleAsync(request!, CancellationToken.None);
+            var answer = await Pairing.HandleAsync(request!, IPAddress.Loopback, CancellationToken.None);
             return XDocument.Parse(answer).Root!;
         }
 
@@ -247,7 +252,7 @@ public class PairingTests
         using var gone = new CancellationTokenSource();
         var request = await HttpRequest.ReadAsync(new MemoryStream(Encoding.ASCII.GetBytes(
             $"GET /pair?uniqueid={client.UniqueId}&{client.Step1} HTTP/1.1\r\n\r\n")), CancellationToken.None);
-        var held = host.Pairing.HandleAsync(request!, gone.Token);
+        var held = host.Pairing.HandleAsync(request!, IPAddress.Loopback, gone.Token);
 
         for (var i = 0; i < 200 && host.Pairing.WaitingFor is null; i++) await Task.Delay(10);
         Assert.NotNull(host.Pairing.WaitingFor);

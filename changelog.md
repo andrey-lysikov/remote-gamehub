@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5
+
+* If uPNP enabled, we can ban ips if it ddos.
+* Now we watch if power mode changed
+* Status web page and css moved from code to statui files
+* Bugfix
+
 ## 1.4
 
 * Installer now can update installed program

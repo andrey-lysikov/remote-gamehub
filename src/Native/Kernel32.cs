@@ -112,6 +112,11 @@ internal static unsafe class Kernel32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetExitCodeProcess(nint process, out uint exitCode);
 
+    // The number Task Manager shows for a process this one holds a handle to. Only the log asks:
+    // a handle names nothing a person can look up in an event log or a crash dump afterwards.
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern uint GetProcessId(nint process);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool TerminateProcess(nint process, uint exitCode);

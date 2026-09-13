@@ -1,0 +1,92 @@
+<!--
+  Copyright © AndreyLysikov
+  SPDX-License-Identifier: Apache-2.0
+
+  The page, as one file rather than as string literals in C#: what is drawn here is markup, and
+  markup in a compiler's string is checked by nobody. Everything the server fills in is a slot
+  spelled {{name}}; the pieces that are only sometimes there are parts of their own, marked with
+  a part comment and pasted into the slot of the same name. WebAssets.cs is the other half.
+-->
+<!--part:page-->
+<!doctype html><html data-theme="{{theme}}"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{name}}</title>
+<style>{{style}}</style>
+
+<!-- The header is the icon beside two lines: the name, the version and the project's address,
+     and under them what the server is doing now. The icon is as tall as both. -->
+<header><img id=mark src="/?icon=1" alt=""><div><div class=titlerow><h1>{{name}} <span class=v>v{{version}}</span></h1><span class=meta id=host>{{host}}</span><span class="meta gh"><a href="{{project}}" target=_blank rel=noopener>GitHub</a></span></div><p id=status>{{status}}</p></div></header>
+
+<!-- Written into every page, shown or hidden: a client can start pairing a second after the page
+     was drawn. Both fields are sent together on Save, and the name is what is listed. -->
+<section id=pair class="card{{pairclass}}">
+<p id=who>{{who}}</p>
+<label>What to call this device<input id=devname maxlength=48 autocomplete=off placeholder="Living-room TV, Anna's phone…"></label>
+<label>The four digits it is showing<input id=pin inputmode=numeric maxlength=4 autocomplete=off></label>
+<div class=row><button id=pairsave class=primary>Save</button><button id=paircancel>Cancel</button><span id=said class=q></span></div>
+</section>
+{{autologon}}
+
+<!-- Above the list, because it is about the whole list rather than about any tile in it. The same
+     thing the tray menu does, put where somebody looking at the games already is. -->
+<div class="row end" id=gamestools><span id=scansaid class=q></span><button id=rescan>Rescan games</button></div>
+
+<div id=games>{{games}}</div>
+
+<!-- The paired devices, under the games: this server admits the first client that asks, so the
+     list is the only account of who can reach this screen and the only place to end it. -->
+<section id=clientsbox><div id=clients>{{clients}}</div></section>
+{{blockedbox}}
+
+<!-- One window for adding and editing, and a real dialog rather than a panel: the browser takes
+     care of the backdrop, of Escape, and of keeping the keyboard inside it. -->
+<dialog id=editor><form method=dialog>
+<h2 id=editortitle>Edit</h2>
+<label>Name<input id=title placeholder="As it should appear"></label>
+<label>Starts with<input id=command placeholder="A file, a shortcut, or steam://rungameid/…"></label>
+<label>From this folder <span class=hint>optional — many games look for their own files beside it</span><input id=folder placeholder="C:\Games\Something"></label>
+{{pointer}}
+<!-- On by default, unlike the pointer above. Named startcard: the pairing section above already
+     claims the id "card" for itself. -->
+<label class=switch><input type=checkbox id=startcard checked><span>Show splash screen when game is starting</span></label>
+
+<!-- A fast game wants the encoder to finish early; a quiet one can afford the time. A client from
+     outside this network is given one level less than this. -->
+<label>Quality <span class=hint>lower for fast games, higher for quiet ones — a remote client drops one level</span><select id=quality><option value=0>Low</option><option value=1>Medium</option><option value=2>High</option><option value=3>Lossless</option></select></label>
+<div id=coverbox><label>Cover<span class=row><button type=button id=find>Find by name</button><label class=upload>Upload<input type=file accept="image/*" hidden id=file></label></span></label>
+<label>Or the address of a picture <span class=hint>any format — it is fetched and converted here</span><span class=row><input id=arturl placeholder="https://…/poster.webp"><button type=button id=fetch>Fetch</button></span></label></div>
+<p id=editorsaid class=q></p>
+<div class="row end"><button type=button id=cancel>Cancel</button><button type=button id=save class=primary>Save</button></div>
+</form></dialog>
+
+<!-- The picker, over the editor: the name stays editable, because a game is installed under one
+     name and sold under another. A click chooses; a click outside closes. -->
+<dialog id=picker>
+<div class=row><input id=pickname placeholder="The name to look for"><button type=button id=picksearch class=primary>Search</button></div>
+<p id=picksaid class=q></p>
+<div id=pickgrid></div>
+</dialog>
+
+<!-- A drawer along the bottom, shut to begin with and opening upwards over the full width,
+     leaving the page where it was rather than pushing it about. -->
+<footer id=logbox><pre id=log>{{log}}</pre><button id=logtoggle>Log</button></footer>
+<script>{{script}}</script>
+
+<!--part:autologon-->
+<!-- Only when the start-up check found the host unreachable after a restart: what that means,
+     what it costs to change, and the button that opens Windows' own window for it. -->
+<section id=autologon class=card>
+<p><b>Windows does not sign you in by itself.</b> Your account has a password, so after a restart this host cannot be reached until somebody signs in at the machine.</p>
+<p>Windows can sign <b>{{account}}</b> in automatically. The password is typed into Windows' own settings window and kept by Windows; this server never sees it. Understand what that means first: anybody who switches the machine on lands on that desktop without a password, and a BitLocker drive with no start-up PIN unlocks on its own with it. Locking the screen right after sign-in keeps the machine shut while this host stays reachable: the lock screen is streamed and unlocked from the client.</p>
+<div class=row><button id=alopen class=primary>Open Windows sign-in settings</button><span id=alsaid class=q></span></div>
+</section>
+
+<!--part:blocked-->
+<!-- Only while the ports are forwarded: who is being turned away is the other half of who may
+     come in, and the button in each row is the only way to take one back. -->
+<section id=blockedbox><div id=blocked>{{blocked}}</div></section>
+
+<!--part:pointer-->
+<!-- On for the few games that draw no pointer of their own; not offered at all once the virtual
+     cursor is off in the configuration file. -->
+<label class=switch><input type=checkbox id=pointer><span>Enable software mouse cursor</span></label>

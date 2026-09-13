@@ -27,6 +27,11 @@ internal static class ConfFormat
         config.WebPort = file.Number("Network", "WebPort", config.WebPort,
             AppParameters.Limits.MinWebPort, AppParameters.Limits.MaxWebPort, warn);
         config.Upnp = file.Bool("Network", "Upnp", config.Upnp);
+        config.BlockAfterFailures = file.Number("Network", "BlockAfterFailures",
+            config.BlockAfterFailures, AppParameters.Limits.MinBlockAfterFailures,
+            AppParameters.Limits.MaxBlockAfterFailures, warn);
+        config.BlockMinutes = file.Number("Network", "BlockMinutes", config.BlockMinutes,
+            AppParameters.Limits.MinBlockMinutes, AppParameters.Limits.MaxBlockMinutes, warn);
 
         config.Steam = file.Bool("Games", "Steam", config.Steam);
         config.Xbox = file.Bool("Games", "Xbox", config.Xbox);
@@ -57,8 +62,8 @@ internal static class ConfFormat
         writer.Note("If you don't have a real HID device, we can emulate one.");
         writer.Key("VirtualMouse", config.VirtualMouse);
         writer.Blank();
-        writer.Note("Prefer a virtual display driver over a real screen, when one is found. This server\n" +
-                    "never installs one itself; the installer's own checkbox does, if you asked it to.");
+        writer.Note("Prefer a virtual display driver over a real screen, when one is found. This server never\n" +
+                    "installs one itself; the installer's own checkbox does, if you asked it to.");
         writer.Key("VirtualDisplay", config.VirtualDisplay);
 
         writer.Section("Display");
@@ -87,6 +92,11 @@ internal static class ConfFormat
         writer.Blank();
         writer.Note("Ask the router, over UPnP, to forward the streaming ports from the internet.");
         writer.Key("Upnp", config.Upnp);
+        writer.Blank();
+        writer.Note("While the ports above are forwarded, an address outside this network that fails to pair\n" +
+                    "this many times is refused for the minutes below, to ban untrusted IP addresses.");
+        writer.Key("BlockAfterFailures", config.BlockAfterFailures);
+        writer.Key("BlockMinutes", config.BlockMinutes);
 
         writer.Section("Games");
         writer.Note("Which stores to look in for installed games.");

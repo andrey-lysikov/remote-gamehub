@@ -83,6 +83,8 @@ internal static class Program
         Application.ThreadException += (_, e) => Log.Crash("unhandled exception on the UI thread", e.Exception);
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
+        WatchTheExit();
+
         try
         {
             // Answers what cannot be answered from the log of a server that refuses to start: what
@@ -232,6 +234,46 @@ internal static class Program
         }
     }
 
+    // Why the process ended, written before it does. The service can only report that its worker
+    // is gone and guess: without these lines a sign-out, a crash and Quit all read the same.
+    private static void WatchTheExit()
+    {
+        Log.Info($"this process is {Environment.ProcessId}, in session " +
+                 $"{Native.Wtsapi32.ServedSessionId()}, running as " +
+                 $"{Environment.UserDomainName}\\{Environment.UserName}" +
+                 (_isWorker ? ", started by the service as its worker" : string.Empty));
+
+        // The one that answers the question the log could not: Windows ends every process in a
+        // session as it goes, and a worker that vanished mid-stream had this arrive first.
+        Microsoft.Win32.SystemEvents.SessionEnding += (_, e) => Log.Event(
+            $"Windows is ending this session ({e.Reason}). Every process in it is about to be\n" +
+            "ended, this one included: what follows in the log is a shutdown, not a fault.");
+
+        Microsoft.Win32.SystemEvents.SessionEnded += (_, e) =>
+            Log.Event($"the session has ended ({e.Reason})");
+
+        // A faulted task nobody awaited. It reaches here when the garbage collector finds it,
+        // which is late, but late is the difference between a reason and none.
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            Log.Crash("a task failed and nothing was waiting for it", e.Exception);
+            e.SetObserved();
+        };
+
+        Application.ApplicationExit += (_, _) =>
+            Log.Event("the message loop has ended; this process is closing what it opened");
+
+        // The last line this process writes. A worker whose log ends here left on its own; one
+        // whose log ends anywhere else was ended from outside, and the service says by whom.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+            Log.Event($"this process is ending after " +
+                      $"{(DateTime.UtcNow - StartedAt).TotalSeconds:0} s");
+    }
+
+    // When this process started, for the line above: the process's own start time is not asked
+    // for, since a worker that cannot open its own process object would lose the reason as well.
+    private static readonly DateTime StartedAt = DateTime.UtcNow;
+
     // Hands a file or an address to whatever Windows already opens it with. Everything the menu
     // shows goes through here, and nothing that fails here is worth interrupting anybody for.
     private static void Open(string? target)
@@ -348,6 +390,11 @@ internal static class Program
         var identity = HostIdentity.Load(directory, config.HostName);
 
         using var database = Database.Open(directory);
+
+        // Before any stream can change it again: a shutdown in the middle of a desktop stream
+        // leaves Windows keeping that stream's scale, and only this puts the person's own back.
+        var scales = new ScaleStore(database);
+        DisplayAdaptation.RestoreLeftoverScales(scales);
         var clients = new ClientStore(database);
 
         // Only here, at startup. A client removed while it is using the stream would lose it for a
@@ -379,9 +426,14 @@ internal static class Program
         // Owns whatever is streaming. Created before the listeners, because the first thing a
         // client does after finding this machine may be to ask it to start.
         using var sessions = new SessionManager(config, preflight.Output!, encoder, games,
-                                                gamepads, tray, session);
+                                                gamepads, tray, session, scales);
 
-        var pairing = new PairingManager(identity, clients);
+        // What keeps an address outside this network hammering the streaming ports while they are
+        // forwarded. It refuses nobody unless [Network] Upnp is on, and what it counts is kept in
+        // the database: a worker restarted by the service must not hand anybody a clean slate.
+        var guard = new AccessGuard(config, new BlockStore(database));
+
+        var pairing = new PairingManager(identity, clients, guard);
 
         // What each playback device mixes into, once: it is the answer to "why is there no
         // surround", and it changes only when a person changes it in Windows.
@@ -398,10 +450,10 @@ internal static class Program
             try
             {
                 server = new GameStreamServer(config, identity, preflight.Output!, clients, pairing,
-                                              games, encoder, sessions);
+                                              games, encoder, sessions, guard);
                 server.Start();
 
-                rtsp = new RtspServer(config, encoder);
+                rtsp = new RtspServer(config, encoder, guard, sessions.Expects);
 
                 // The negotiation is where a stream's numbers are settled, so it is also where the
                 // session is actually built: /launch knows the key but not the picture.
@@ -451,8 +503,8 @@ internal static class Program
 
         // The page: what this server is doing, and the box for the four digits a pairing client
         // shows. On a port of its own, answering private addresses only.
-        var console = new WebConsole(config, identity, pairing, clients, games, sessions, encoder,
-                                     updates, gamepads, directory);
+        var console = new WebConsole(config, identity, pairing, clients, guard, games, sessions,
+                                     encoder, updates, gamepads, directory);
         console.Start();
 
         // The four digits a pairing client shows are never sent over the protocol — both ends
@@ -572,11 +624,19 @@ internal static class Program
             tray.SetState(watch.TrayState);
         };
 
+        // Sleep, shutdown and a sign-out all take this machine away without ending anything first.
+        // The stream goes down here, while there is still a network to say goodbye over; the game
+        // is left running, so a client that comes back to a woken machine resumes rather than
+        // starts again.
+        session.Leaving += why => sessions.MachineLeaving(why);
+
         // A warning, at every start, whatever Debug says. Not a fault — it is what this server was
         // asked to be — but it is the one property that decides what reaching this machine costs.
-        Log.Warn("Nobody is asked to approve a client: the first one that asks to pair is admitted,\n" +
-                 "and from then on it may connect, see this screen and use this keyboard, with the\n" +
-                 "rights this server runs under. That is the intended behaviour on a home network.\n" +
+        Log.Warn("Pairing is done at this machine and only from this network: the digits a client\n" +
+                 "shows are typed on the page here, and a request to pair from any other address is\n" +
+                 "refused without being answered. A device that has paired may then connect from\n" +
+                 "wherever the ports reach it, see this screen and use this keyboard, with the\n" +
+                 "rights this server runs under — which is what [Network] Upnp opens it to.\n" +
                  "Set [Network] BindAddress to one address of this machine if it is also on a\n" +
                  "network you do not trust.");
 

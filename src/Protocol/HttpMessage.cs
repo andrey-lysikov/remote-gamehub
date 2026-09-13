@@ -164,6 +164,17 @@ internal static class HttpResponse
         await stream.FlushAsync(cancel);
     }
 
+    // Refused, and nothing else: no body, no reason, no WWW-Authenticate naming a scheme to try.
+    // Whoever asked learns only that it was not admitted, which is all it is owed — a refusal
+    // that explains itself tells somebody working through the PIN space where they stand.
+    internal static Task WriteUnauthorisedAsync(Stream stream, CancellationToken cancel)
+    {
+        var head = Encoding.ASCII.GetBytes(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+        return stream.WriteAsync(head, cancel).AsTask();
+    }
+
     internal static Task WriteNotFoundAsync(Stream stream, CancellationToken cancel)
     {
         var head = Encoding.ASCII.GetBytes(

@@ -25,6 +25,8 @@ public class ConfFormatTests
             BindAddress = "192.168.1.20",
             WebPort = 8080,
             Upnp = true,
+            BlockAfterFailures = 3,
+            BlockMinutes = 30,
             Steam = false,
             Xbox = true,
             Epic = false,
@@ -48,6 +50,8 @@ public class ConfFormatTests
         Assert.Equal("192.168.1.20", read.BindAddress);
         Assert.Equal(8080, read.WebPort);
         Assert.True(read.Upnp);
+        Assert.Equal(3, read.BlockAfterFailures);
+        Assert.Equal(30, read.BlockMinutes);
         Assert.False(read.Steam);
         Assert.True(read.Xbox);
         Assert.False(read.Epic);
@@ -84,6 +88,24 @@ public class ConfFormatTests
         Assert.Equal(47998, config.VideoPort);
         Assert.Equal(47999, config.ControlPort);
         Assert.Equal(48000, config.AudioPort);
+    }
+
+    [Fact]
+    public void Sample_conf_is_what_the_server_writes_by_default()
+    {
+        // Found by walking up from the build output: the sample sits at the root of the repository.
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "sample.conf")))
+            directory = directory.Parent;
+
+        Assert.NotNull(directory);
+
+        // Line endings aside: git may check the sample out either way, and the writer uses the
+        // platform's own.
+        static string Lines(string text) => text.Replace("\r\n", "\n");
+
+        var sample = File.ReadAllText(Path.Combine(directory!.FullName, "sample.conf"));
+        Assert.Equal(Lines(sample), Lines(ConfFormat.Write(new AppConfig())));
     }
 
     [Fact]

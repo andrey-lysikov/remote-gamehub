@@ -205,14 +205,37 @@ internal static class Advapi32
 
     internal const uint SERVICE_ACCEPT_STOP = 0x00000001;
     internal const uint SERVICE_ACCEPT_SHUTDOWN = 0x00000004;
+    internal const uint SERVICE_ACCEPT_POWEREVENT = 0x00000040;
     internal const uint SERVICE_ACCEPT_SESSIONCHANGE = 0x00000080;
 
     internal const uint SERVICE_CONTROL_STOP = 1;
     internal const uint SERVICE_CONTROL_INTERROGATE = 4;
     internal const uint SERVICE_CONTROL_SHUTDOWN = 5;
+
+    // The machine going to sleep and coming back. A service in session 0 is told this; the worker
+    // hears it for itself, and ends whatever is streaming before the machine stops.
+    internal const uint SERVICE_CONTROL_POWEREVENT = 0x0000000D;
     // Every reason (connect, disconnect, sign-in, sign-out, lock, unlock) is treated the same and
     // none is named here: the supervisor asks Windows which session matters instead.
     internal const uint SERVICE_CONTROL_SESSIONCHANGE = 0x0000000E;
+
+    // PBT_*, the eventType of SERVICE_CONTROL_POWEREVENT. A suspend is announced once; a wake
+    // arrives as either of the two resumes, depending on whether a person asked for it.
+    internal const uint PBT_APMSUSPEND = 0x0004;
+    internal const uint PBT_APMRESUMESUSPEND = 0x0007;
+    internal const uint PBT_APMRESUMEAUTOMATIC = 0x0012;
+    internal const uint PBT_APMPOWERSTATUSCHANGE = 0x000A;
+    internal const uint PBT_POWERSETTINGCHANGE = 0x8013;
+
+    internal static string DescribePowerEvent(uint eventType) => eventType switch
+    {
+        PBT_APMSUSPEND => "this machine is going to sleep",
+        PBT_APMRESUMESUSPEND => "this machine woke up because somebody asked it to",
+        PBT_APMRESUMEAUTOMATIC => "this machine woke up",
+        PBT_APMPOWERSTATUSCHANGE => "the power supply changed",
+        PBT_POWERSETTINGCHANGE => "a power setting changed",
+        _ => $"power event {eventType}",
+    };
 
     internal const uint NO_ERROR = 0;
     internal const uint ERROR_CALL_NOT_IMPLEMENTED = 120;

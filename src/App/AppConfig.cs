@@ -66,6 +66,14 @@ internal sealed class AppConfig
     // Ask the router to forward the streaming ports from the internet.
     internal bool Upnp { get; set; }
 
+    // Failed pairing attempts one address outside this network is allowed before it is refused
+    // outright, and for how many minutes the first refusal lasts. Each refusal in a row multiplies
+    // that: the second lasts twice as long, the third three times, up to a day. Only ever applied
+    // while Upnp is on: without forwarding, nothing outside can reach the streaming ports at all.
+    // Zero attempts turns this off.
+    internal int BlockAfterFailures { get; set; } = 5;
+    internal int BlockMinutes { get; set; } = 15;
+
     // [Display]. The codec, the frame rate and the bitrate have no setting of their own: they are
     // the client's to choose, and every ceiling here was caught halving one silently.
     internal string Output { get; set; } = "auto";

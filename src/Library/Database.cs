@@ -168,6 +168,42 @@ internal sealed class Database : IDisposable
             version = 9;
         }
 
+        if (version < 10)
+        {
+            // The addresses being refused, so that a restart does not hand a run of failures back
+            // its clean slate. One row per address, written when the count changes and deleted
+            // when the address is let in again or has been quiet long enough to be forgotten.
+            Execute(_connection,
+                """
+                CREATE TABLE blocks (
+                    address       TEXT    PRIMARY KEY,  -- as the guard folds it, one spelling only
+                    attempts      INTEGER NOT NULL,     -- failed attempts while this row has lived
+                    blocks        INTEGER NOT NULL,     -- refusals in a row; each lengthens the next
+                    last_failure  TEXT    NOT NULL,
+                    blocked_until TEXT    NOT NULL
+                );
+                """);
+
+            Execute(_connection, "PRAGMA user_version = 10;");
+            version = 10;
+        }
+
+        if (version < 11)
+        {
+            // The desktop scale a stream replaced, per screen. Windows keeps a scale across a
+            // restart, so a row still here at a start is a scale to put back (see ScaleStore).
+            Execute(_connection,
+                """
+                CREATE TABLE display_scales (
+                    device  TEXT    PRIMARY KEY,  -- \\.\DISPLAYn
+                    percent INTEGER NOT NULL      -- the scale to go back to
+                );
+                """);
+
+            Execute(_connection, "PRAGMA user_version = 11;");
+            version = 11;
+        }
+
         Log.Info(from == version
             ? $"database {Path}, schema version {version}"
             : $"database {Path}, schema migrated from version {from} to {version}");

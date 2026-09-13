@@ -30,6 +30,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
     private readonly GameLibrary _games;
     private readonly EncoderCapabilities _encoder;
     private readonly SessionManager _sessions;
+    private readonly AccessGuard _guard;
     private readonly CancellationTokenSource _stopping = new();
 
     private readonly List<TcpListener> _listeners = new();
@@ -37,7 +38,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     internal GameStreamServer(AppConfig config, HostIdentity identity, DisplayOutput output,
                               ClientStore clients, PairingManager pairing, GameLibrary games,
-                              EncoderCapabilities encoder, SessionManager sessions)
+                              EncoderCapabilities encoder, SessionManager sessions,
+                              AccessGuard guard)
     {
         _config = config;
         _identity = identity;
@@ -47,6 +49,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
         _games = games;
         _encoder = encoder;
         _sessions = sessions;
+        _guard = guard;
     }
 
 
@@ -126,7 +129,21 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     private async Task ServeAsync(TcpClient client, bool secure)
     {
-        var peer = Peer.Describe((client.Client.RemoteEndPoint as IPEndPoint)?.Address);
+        var address = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
+        var peer = Peer.Describe(address);
+
+        // Before the request is read, and before TLS: an address that has spent its attempts has
+        // nothing more to say here, and reading it out would only be work done on its behalf.
+        if (_guard.IsBlocked(address, out var left))
+        {
+            Log.WarnOccasionally($"blocked {peer}",
+                $"{peer} was dropped without being read: it is refused for another " +
+                $"{left.TotalMinutes:0} minute(s) after failing to pair. " +
+                "See [Network] BlockAfterFailures.");
+
+            client.Close();
+            return;
+        }
 
         try
         {
@@ -159,6 +176,38 @@ internal sealed class GameStreamServer : IAsyncDisposable
                          (known is null ? string.Empty : $"  [{known.Name}]"));
 
 
+                // Everything but finding this machine and pairing with it is for a client this
+                // server has admitted. The certificate is the whole of the proof, and one that
+                // does not match a remembered client is no proof at all.
+                if (NeedsAPairedClient(request.Path) && known is null)
+                {
+                    Log.Warn($"{peer} asked for {request.Path} without being paired; it is refused");
+
+                    _guard.Failed(address, $"it asked for {request.Path} without being paired");
+
+                    await HttpResponse.WriteUnauthorisedAsync(stream, _stopping.Token);
+                    return;
+                }
+
+                // Pairing is done at the machine: somebody reads four digits off the client's
+                // screen and types them into the page here. An address off this network cannot be
+                // at the machine, so it is never let into the exchange at all, forwarded ports or
+                // not. What UPnP opens is streaming to a client that paired at home; a new
+                // pairing is not something the internet is invited to start.
+                if (request.Path == "/pair" && !PairsHere(address))
+                {
+                    Log.Warn($"{peer} asked to pair from outside this network; it is refused. " +
+                             "Pairing happens at the machine itself, and the forwarded ports " +
+                             "carry streams for clients\nthat paired here, never a new pairing. " +
+                             "Pair the device on this network once, and it connects from " +
+                             "anywhere afterwards.");
+
+                    _guard.Failed(address, "it asked to pair from outside this network");
+
+                    await HttpResponse.WriteUnauthorisedAsync(stream, _stopping.Token);
+                    return;
+                }
+
                 // The one endpoint that answers with an image rather than a document, so it does
                 // not go through the XML route below.
                 if (request.Path == "/appasset")
@@ -175,7 +224,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
                 using var patience = pairing ? MeasurePatience(client, gone) : null;
                 using var cancel = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token, gone.Token);
 
-                var answer = await RouteAsync(request, known, client.Client.LocalEndPoint,
+                var answer = await RouteAsync(request, known, address, client.Client.LocalEndPoint,
                                               cancel.Token);
                 if (answer is null)
                 {
@@ -293,15 +342,26 @@ internal sealed class GameStreamServer : IAsyncDisposable
         }
     }
 
+    // The paths a client may ask for before this server has admitted it: the two it needs to be
+    // found and to pair. Everything else — the list, the covers, a launch, a resume, a cancel —
+    // is a paired client's, and over TLS, which is where the certificate comes from.
+    private static bool NeedsAPairedClient(string path) =>
+        path is not ("/serverinfo" or "/pair");
+
+    // Whether this address could be at the machine: the same private ranges the page answers on,
+    // and loopback. An address Windows would not tell apart from the internet is not one of them.
+    private static bool PairsHere(IPAddress? address) =>
+        address is not null && WebConsole.IsPrivate(Peer.Plain(address));
+
     private async Task<string?> RouteAsync(HttpRequest request, KnownClient? known,
-                                           EndPoint? reachedAt,
+                                           IPAddress? address, EndPoint? reachedAt,
                                            CancellationToken cancel) => request.Path switch
     {
         "/serverinfo" => ServerInfo(known, reachedAt),
         "/applist" => AppList(),
-        "/pair" => await _pairing.HandleAsync(request, cancel),
-        "/launch" => Launch(request, reachedAt),
-        "/resume" => Resume(request, reachedAt),
+        "/pair" => await _pairing.HandleAsync(request, address, cancel),
+        "/launch" => Launch(request, address, reachedAt),
+        "/resume" => Resume(request, address, reachedAt),
         "/cancel" => Cancel(),
         _ => null,
     };
@@ -514,14 +574,14 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     // Starts a session. The client sends the key its input and control messages are encrypted
     // with, what it wants to run, and a picture shape — the picture is agreed later over RTSP.
-    private string Launch(HttpRequest request, EndPoint? reachedAt)
+    private string Launch(HttpRequest request, IPAddress? from, EndPoint? reachedAt)
     {
         var launch = ReadLaunchRequest(request);
         if (launch is null)
             return LaunchRefused(400, "The launch request is missing or malforming a parameter " +
                                       "this server needs.");
 
-        if (!_sessions.Launch(launch, out var refusal))
+        if (!_sessions.Launch(launch, from, out var refusal))
             return LaunchRefused(503, $"This server cannot start the stream: {refusal}");
 
         return BuildDocument(xml =>
@@ -617,7 +677,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     // Reattaches to a session already running. This server reports a running application only
     // while it is actually streaming, so this is asked when a client's own stream dropped.
-    private string Resume(HttpRequest request, EndPoint? reachedAt)
+    private string Resume(HttpRequest request, IPAddress? from, EndPoint? reachedAt)
     {
         var resume = ReadLaunchRequest(request);
         if (resume is null)
@@ -630,7 +690,7 @@ internal sealed class GameStreamServer : IAsyncDisposable
             }, 400);
         }
 
-        if (!_sessions.Resume(resume, out var refusal))
+        if (!_sessions.Resume(resume, from, out var refusal))
         {
             return BuildDocument(xml =>
             {

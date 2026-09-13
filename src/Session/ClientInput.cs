@@ -23,6 +23,7 @@ internal sealed class ClientInput
     private const uint MagicMouseButtonUp = 0x09;
     private const uint MagicScroll = 0x0A;
     private const uint MagicMultiController = 0x0C;
+    private const uint MagicEnableHaptics = 0x0D;
     private const uint MagicUtf8Text = 0x17;
     private const uint MagicHorizontalScroll = 0x55000001;
     private const uint MagicControllerArrival = 0x55000004;
@@ -122,6 +123,16 @@ internal sealed class ClientInput
     // Told when the screen has been put into a different mode.
     internal void SetScreen(Rect screen) => _screen = screen;
 
+    // Whether a game's rumble is sent to the client. On until the client says otherwise: one that
+    // never sends SS_ENABLE_HAPTICS predates it, and had rumble all along.
+    internal bool HapticsEnabled
+    {
+        get => Volatile.Read(ref _hapticsEnabled);
+        private set => Volatile.Write(ref _hapticsEnabled, value);
+    }
+
+    private bool _hapticsEnabled = true;
+
     // Which kinds of input packet have been seen this stream. See Handle.
     private readonly HashSet<uint> _firstSeen = new();
 
@@ -171,6 +182,12 @@ internal sealed class ClientInput
                 // an older one meant a controller, and the two are told apart by length.
                 case MagicScroll when payload.Length == ScrollPacketBytes: Scroll(body); break;
                 case MagicScroll: Controller(body); break;
+
+                // SS_ENABLE_HAPTICS: sent once at the start of every stream, saying whether the
+                // client takes rumble back. Obeyed rather than logged: every client sends it.
+                case MagicEnableHaptics when body.Length >= 2:
+                    HapticsEnabled = BinaryPrimitives.ReadUInt16LittleEndian(body) != 0;
+                    break;
 
                 default:
                     // Once per kind, not per packet, and with the bytes so an unknown packet can be

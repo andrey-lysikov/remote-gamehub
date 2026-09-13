@@ -1,0 +1,208 @@
+:root{color-scheme:light;--bg:#f3f3f3;--panel:#fbfbfb;--line:#e2e2e2;--ink:#1a1a1a;
+--dim:#5f5f5f;--faint:#8a8a8a;--fainter:#c4c4c4;--field:#fff;--field-line:#c9c9c9;
+--button:#fbfbfb;--button-hover:#eaeaea;--button-line:#cfcfcf;--button-line-hover:#a8a8a8;
+--glass:rgba(251,251,251,.85);--primary:#dff0e2;--primary-line:#8cc79a;--primary-hover:#cfe8d4;
+--danger-line:#d99;--danger-bg:#fbe9e9;--live:#2a7f3f;--warn:#b8620a;--green-line:#7fb98a;
+--update-hover:#e6f4e9;--log-bg:#fafafa;--log-ink:#333;--none-ink:#9a9a9a;
+--pin-field:#fff;--pin-line:#b0b0b0;--pin-ink:#111;--backdrop:rgba(0,0,0,.35);
+--add-hover-ink:#333;--meta-link:#6a6a6a}
+/* Dark: the palette the page was first drawn in. */
+:root[data-theme=dark]{color-scheme:dark;--bg:#101010;--panel:#161616;--line:#262626;
+--ink:#ddd;--dim:#8a8a8a;--faint:#666;--fainter:#444;--field:#111;--field-line:#3a3a3a;
+--button:#1c1c1c;--button-hover:#262626;--button-line:#3a3a3a;--button-line-hover:#555;
+--glass:rgba(16,16,16,.82);--primary:#2c4a33;--primary-line:#3d6b47;--primary-hover:#35603d;
+--danger-line:#844;--danger-bg:#2a1a1a;--live:#7c6;--warn:#d95;--green-line:#3a5;
+--update-hover:#1a2a1e;--log-bg:#0c0c0c;--log-ink:#bbb;--none-ink:#555;
+--pin-field:#222;--pin-line:#555;--pin-ink:#eee;--backdrop:rgba(0,0,0,.6);
+--add-hover-ink:#aaa;--meta-link:#888}
+*{box-sizing:border-box}
+body{font:15px/1.5 system-ui,sans-serif;margin:0 auto;padding:1.25rem 1.25rem 4rem;
+/* Wide enough for five posters and their gaps, and no wider: past that the grid keeps */
+/* adding columns until a poster is a thumbnail again. */
+max-width:960px;background:var(--bg);color:var(--ink)}
+
+/* The header: one line, and it stays put while the grid scrolls under it. */
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:.25rem 0 .75rem;
+border-bottom:1px solid var(--line);margin-bottom:1.25rem;display:flex;gap:.7rem;
+align-items:center}
+/* As tall as the two lines beside it, and not a pixel of the width they need: the icon is */
+/* the one thing here that is decoration, so it gives way. */
+#mark{width:2.7rem;height:2.7rem;flex:none;image-rendering:auto}
+header>div{min-width:0;flex:1}
+h1{font-size:1.05rem;margin:0;font-weight:600}
+.v{color:var(--faint);font-weight:400}
+.meta{margin-left:.6rem;font-size:12px;font-weight:400;color:var(--faint)}
+.meta a{color:var(--meta-link);text-decoration:none}
+.meta a:hover{color:var(--ink);text-decoration:underline}
+#status{margin:.35rem 0 0;color:var(--dim);font-size:13px;
+white-space:nowrap;overflow:auto;scrollbar-width:none}
+/* Title, host facts and the GitHub link on one row; the facts between the two fixed ends */
+/* give way, scrolling rather than wrapping the link onto a line of its own. */
+.titlerow{display:flex;align-items:baseline;min-width:0}
+.titlerow h1{flex:none}
+#host{flex:1;min-width:0;overflow:auto;scrollbar-width:none;white-space:nowrap}
+.titlerow .gh{flex:none}
+#status span.live{color:var(--live)}
+/* The one link on the host line, and the one thing on the page in a colour of its own: */
+/* a newer version is news, and news is allowed to stand out. */
+#host a.update{color:var(--live);font-weight:600;text-decoration:none;
+border:1px solid var(--green-line);border-radius:.3rem;padding:.05rem .45rem}
+#host a.update:hover{background:var(--update-hover)}
+.dot{color:var(--fainter);margin:0 .15rem}
+
+/* The grid: auto-fill with a minimum of about a hundred and forty pixels lands on five or */
+/* six columns at an ordinary window and on two on a telephone. */
+#gamestools{align-items:center;margin:0 0 .6rem}
+#games{display:grid;gap:1.25rem;grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}
+.game{background:none;border:0;padding:0;color:inherit;text-align:left;font:inherit}
+/* Positions everything pinned to the poster (the tools, the stop button, the running */
+/* badge) against the image alone, not against the title and source line under it too. */
+.poster{position:relative}
+/* 3:4, matching the shape CoverArt.ToPng pads every cover to. No border or rounding: the */
+/* poster is the tile, not a picture framed inside one. */
+.art{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:transparent}
+.art.none{display:grid;place-items:center;color:var(--none-ink);font-size:11px}
+.game h3{font-size:13px;margin:.5rem 0 0;font-weight:500;line-height:1.3;
+overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.game .q{margin:.1rem 0 0;font-size:11px;color:var(--faint)}
+
+/* The two marks sit on the poster and appear when it is pointed at. On a touch screen */
+/* there is no pointing, so there they are simply always there. */
+.tools{position:absolute;top:.5rem;right:.5rem;display:flex;gap:.35rem;opacity:0;
+transition:opacity .12s}
+.game:hover .tools,.game:focus-within .tools{opacity:1}
+@media (hover:none){.tools{opacity:1}}
+/* Present in every tile, shown only on the running one via a class the poll toggles. */
+/* Qualified with the tag: a bare .running also matched the article and hid the tile. */
+span.running{display:none;position:absolute;right:.4rem;bottom:.4rem;
+padding:.22rem .55rem;
+border-radius:.4rem;font-size:15px;font-weight:600;letter-spacing:.02em;
+background:var(--live);color:var(--bg);box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.game.running span.running{display:inline-block}
+.tools button{padding:.3rem;line-height:0;border-radius:.35rem;
+background:var(--glass);border:1px solid var(--button-line);backdrop-filter:blur(4px)}
+.tools button:hover{background:var(--button-hover);border-color:var(--button-line-hover)}
+.tools .danger:hover{border-color:var(--danger-line);background:var(--danger-bg)}
+/* Centred on the poster and about three times the size of the small tools. Grey glass at */
+/* rest, like them, and only turns to danger red on approach. */
+.stop{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+width:3.6rem;height:3.6rem;align-items:center;justify-content:center;padding:0;
+border-radius:50%;border:1px solid var(--button-line);background:var(--glass);
+color:var(--ink);backdrop-filter:blur(4px);opacity:0;
+transition:opacity .12s,background .12s,border-color .12s,color .12s}
+/* Filled, unlike the other outline icons — the inherited stroke of the same colour is */
+/* turned off here, or it blurs into the fill instead of reading as a crisp square. */
+.stop svg{width:28px;height:28px;fill:currentColor;stroke:none}
+.game.running .stop{display:flex}
+.game:hover .stop,.game:focus-within .stop{opacity:1}
+@media (hover:none){.game.running .stop{opacity:1}}
+.stop:hover{background:var(--danger-bg);border-color:var(--danger-line);
+color:var(--danger-line)}
+svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;
+stroke-linecap:round;stroke-linejoin:round;display:block}
+svg.big{width:30px;height:30px;stroke-width:1.5}
+
+/* The tile that adds one, shaped like the posters it sits among but with nothing framing */
+/* it: no border, no background, on the same bare ground as everything else on the page. */
+.game.add{display:grid;place-content:center;gap:.4rem;justify-items:center;
+aspect-ratio:3/4;border:0;background:none;color:var(--faint);cursor:pointer}
+.game.add:hover{color:var(--add-hover-ink)}
+.game.add span{font-size:12px}
+
+/* The paired devices: rows rather than tiles, because a device is a name and two dates */
+/* and nothing worth a picture. */
+#clients:not(:empty){display:block;margin-top:2rem}
+#clients h2{font-size:13px;font-weight:500;color:var(--dim);margin:0 0 .6rem}
+.client{display:flex;align-items:center;gap:.6rem;padding:.55rem .75rem;
+border:1px solid var(--line);border-radius:.45rem;margin-bottom:.4rem;
+background:var(--panel)}
+.client b{font-weight:500;font-size:13px}
+.client .q{flex:1;font-size:11px;min-height:0}
+.client button{padding:.3rem;line-height:0}
+
+/* The refused addresses, in the same rows as the devices above: one list is who may come */
+/* in and the other is who may not, and they read better alike than apart. */
+#blocked:not(:empty){display:block;margin-top:2rem}
+#blocked h2{font-size:13px;font-weight:500;color:var(--dim);margin:0 0 .6rem}
+.banline{font-size:12px;color:var(--dim);margin:0 0 .6rem}
+
+/* Buttons and fields, shared by the dialogs and the pairing card. */
+button,.upload{font:inherit;font-size:13px;padding:.35rem .8rem;border-radius:.35rem;
+border:1px solid var(--button-line);background:var(--button);color:var(--ink);cursor:pointer}
+button:hover,.upload:hover{background:var(--button-hover)}
+button.primary{background:var(--primary);border-color:var(--primary-line)}
+button.primary:hover{background:var(--primary-hover)}
+.row{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center}
+.row.end{justify-content:flex-end;margin-top:.25rem}
+.q{color:var(--dim);min-height:1.2em;margin:0}
+
+/* The pairing card: green, because it is the one thing on this page that is urgent. */
+.card{border:1px solid var(--green-line);border-radius:.5rem;padding:1rem;margin-bottom:1.25rem}
+.card.off{display:none}
+.card label{display:block;font-size:12px;color:var(--dim);margin:.6rem 0}
+#devname{display:block;width:min(24rem,100%);margin-top:.3rem;font:inherit;font-size:14px;
+padding:.45rem .6rem;border-radius:.35rem;border:1px solid var(--field-line);background:var(--field);
+color:var(--ink)}
+/* Wide enough for four digits with room to spare: the letter spacing is charged after the */
+/* last digit as well, so a box measured to fit exactly hides the fourth. */
+#pin{display:block;font:inherit;font-size:2rem;width:10.5rem;margin-top:.3rem;padding:.4rem;
+text-align:center;letter-spacing:.4em;border-radius:.4rem;border:1px solid var(--pin-line);
+background:var(--pin-field);color:var(--pin-ink)}
+#said{margin-left:.5rem}
+
+dialog{border:1px solid var(--line);border-radius:.6rem;background:var(--panel);
+color:var(--ink);padding:1.25rem;width:min(30rem,calc(100vw - 2rem))}
+dialog::backdrop{background:var(--backdrop)}
+dialog h2{font-size:1rem;margin:0 0 1rem}
+dialog label{display:block;font-size:12px;color:var(--dim);margin-bottom:.9rem}
+/* The browser's own [hidden] loses to the rule above on specificity, and a field that */
+/* will not hide is worse than one that was never written. */
+dialog label[hidden]{display:none}
+.hint{color:var(--faint)}
+dialog label.upload{display:inline-block;margin:0}
+/* The one switch in the window: the box beside its words rather than above them, which is */
+/* what every other checkbox on this machine looks like. */
+dialog label.switch{display:flex;gap:.5rem;align-items:flex-start;cursor:pointer}
+dialog label.switch input{width:auto;margin:.15rem 0 0}
+dialog label.switch span{color:var(--ink)}
+dialog input[type=text],dialog input:not([type]),dialog select{display:block;width:100%;
+margin-top:.3rem;font:inherit;font-size:14px;padding:.45rem .6rem;border-radius:.35rem;
+border:1px solid var(--field-line);background:var(--field);color:var(--ink)}
+
+/* A field standing beside a button rather than on its own line: it takes what is left. */
+.row input{flex:1 1 8rem;width:auto;margin-top:0}
+.row{margin-top:.3rem}
+
+/* The picker: wider than the editor for four posters side by side, no taller than the */
+/* window, and four columns exactly whatever the width. */
+#picker{width:min(46rem,calc(100vw - 2rem));max-height:calc(100vh - 2rem)}
+/* Only on the open form: any display on the element itself outranks the display:none a */
+/* browser gives a closed dialog, and the window then stands on the page, empty. */
+#picker[open]{display:flex;flex-direction:column}
+#picker .row{margin-top:0}
+#pickname{flex:1;font:inherit;font-size:14px;padding:.45rem .6rem;border-radius:.35rem;
+border:1px solid var(--field-line);background:var(--field);color:var(--ink)}
+/* minmax(0,1fr) rather than 1fr, and min-width on the item for the same reason: a plain */
+/* 1fr column may not become narrower than the widest picture, and the grid went off screen. */
+#pickgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;
+overflow-y:auto;overflow-x:hidden;min-height:0;padding:.25rem .1rem;margin-top:.5rem}
+.pick{cursor:pointer;background:none;border:0;padding:0;color:inherit;font:inherit;
+text-align:left;min-width:0}
+.pick img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:.4rem;display:block;
+border:2px solid transparent;background:var(--panel)}
+.pick:hover img,.pick:focus-visible img{border-color:var(--live)}
+.pick span{display:block;font-size:11px;color:var(--dim);margin-top:.3rem;overflow:hidden;
+white-space:nowrap;text-overflow:ellipsis}
+
+/* The log: a drawer along the bottom that grows upwards. The page keeps room for the bar */
+/* at all times, so nothing is ever hidden behind it. */
+#logbox{position:fixed;left:0;right:0;bottom:0;z-index:10;display:flex;
+flex-direction:column;background:var(--log-bg);border-top:1px solid var(--line)}
+#log{height:0;overflow:auto;margin:0;padding:0 1rem;font-size:12px;color:var(--log-ink);
+white-space:pre-wrap;word-break:break-word;transition:height .18s ease}
+#logbox.open #log{height:45vh;padding:1rem}
+#logtoggle{border:0;border-radius:0;background:none;color:var(--dim);text-align:left;
+padding:.5rem 1rem;width:100%}
+#logtoggle:hover{background:var(--panel);color:var(--ink)}
+#logtoggle::before{content:"▲ ";font-size:9px;vertical-align:middle}
+#logbox.open #logtoggle::before{content:"▼ "}

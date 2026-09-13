@@ -32,6 +32,14 @@ internal sealed class PortForwarding : IAsyncDisposable
     // renewal: not being forwarded at all is more urgent than a mapping that is merely due.
     private static readonly TimeSpan SearchRetryEvery = TimeSpan.FromMinutes(2);
 
+    // Between searches while this machine has no address a router could answer on: the network is
+    // coming up, which takes seconds rather than minutes, and there is nothing to report yet.
+    private static readonly TimeSpan NetworkRetryEvery = TimeSpan.FromSeconds(15);
+
+    // Searches that must find nothing before it is said out loud. Three of them, two minutes
+    // apart, is around five minutes of a router that has had every chance to answer.
+    private const int ComplainAfterSearches = 3;
+
     private readonly AppConfig _config;
     private readonly CancellationTokenSource _stopping = new();
 
@@ -41,7 +49,11 @@ internal sealed class PortForwarding : IAsyncDisposable
     private string? _localAddress;
     private Task? _renewing;
     private bool _announced;
-    private bool _searchFailedOnce;
+
+    // Searches that found nothing, in a row. The first one or two are ordinary — at startup the
+    // network card is often still negotiating, and a search from an address nothing answers on
+    // finds nothing — so the complaint waits until it is clear the router is not going to answer.
+    private int _searchesThatFoundNothing;
 
     internal PortForwarding(AppConfig config) => _config = config;
 
@@ -70,8 +82,25 @@ internal sealed class PortForwarding : IAsyncDisposable
             {
                 if (_controlUrl is null)
                 {
-                    if (!await FindRouterAsync())
+                    var addresses = LocalAddresses();
+
+                    // Nothing to search from: every address this machine has is one Windows made
+                    // up while it waited for a lease. Not the router's fault and not worth a
+                    // warning — it is the network coming up, and it comes up in seconds.
+                    if (addresses.Count == 0)
                     {
+                        Log.Info("no address of this machine can reach a router yet (the network " +
+                                 $"is still coming up); looking again in " +
+                                 $"{NetworkRetryEvery.TotalSeconds:0} s");
+
+                        if (!await WaitAsync(NetworkRetryEvery)) return;
+                        continue;
+                    }
+
+                    if (!await FindRouterAsync(addresses))
+                    {
+                        _searchesThatFoundNothing++;
+
                         var message =
                             "No router answered the search for one that forwards ports, so the\n" +
                             "streaming ports are reachable on this network only. Either the router\n" +
@@ -81,21 +110,28 @@ internal sealed class PortForwarding : IAsyncDisposable
                             string.Join(", ", Wanted.Select(w => $"{w.Port}/{w.Protocol}")) +
                             $"\nTried again every {SearchRetryEvery.TotalMinutes:0} minute(s).";
 
-                        // Said once at a level worth noticing; a router that stays off is not news
-                        // the second time, and this may retry for as long as the server runs.
-                        if (_searchFailedOnce) Log.Info(message); else Log.Warn(message);
-                        _searchFailedOnce = true;
+                        // A search that finds nothing is ordinary the first few times: a router
+                        // busy answering a dozen other things drops the odd multicast, and one at
+                        // startup often goes out before this machine's address is good for
+                        // anything. Said out loud once it has plainly had its chances, and once.
+                        if (_searchesThatFoundNothing == ComplainAfterSearches) Log.Warn(message);
+                        else Log.Info(message);
 
-                        try
-                        {
-                            await Task.Delay(SearchRetryEvery, _stopping.Token);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            return;
-                        }
-
+                        if (!await WaitAsync(SearchRetryEvery)) return;
                         continue;
+                    }
+
+                    // Worth a line of its own: it is the answer to "it said there was no router,
+                    // and then it forwarded the ports" — both are true, minutes apart.
+                    if (_searchesThatFoundNothing > 0)
+                    {
+                        Log.Event($"a router answered on attempt " +
+                                  $"{_searchesThatFoundNothing + 1}, after " +
+                                  $"{_searchesThatFoundNothing} search(es) that found none. The " +
+                                  "earlier lines saying the ports are reachable on this network " +
+                                  "only no longer hold.");
+
+                        _searchesThatFoundNothing = 0;
                     }
 
                     // Before anything is asked for: a mapping to an address that is itself behind
@@ -105,14 +141,7 @@ internal sealed class PortForwarding : IAsyncDisposable
 
                 await MapAllAsync();
 
-                try
-                {
-                    await Task.Delay(RenewEvery, _stopping.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
+                if (!await WaitAsync(RenewEvery)) return;
             }
         }
         catch (Exception error)
@@ -122,13 +151,24 @@ internal sealed class PortForwarding : IAsyncDisposable
         }
     }
 
+    // Sleeps, and answers false when the server is stopping rather than when the sleep finished.
+    private async Task<bool> WaitAsync(TimeSpan how)
+    {
+        try
+        {
+            await Task.Delay(how, _stopping.Token);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
     // The multicast search, then the router's description, which names the address to send the
     // requests to. From every address this machine has: the routing table picked a virtual one.
-    private async Task<bool> FindRouterAsync()
+    private async Task<bool> FindRouterAsync(IReadOnlyList<IPAddress> addresses)
     {
-        var addresses = LocalAddresses();
-        if (addresses.Count == 0) return false;
-
         Log.Info($"looking for a router that forwards ports, from {addresses.Count} address(es): " +
                  string.Join(", ", addresses));
 
@@ -230,6 +270,17 @@ internal sealed class PortForwarding : IAsyncDisposable
                     if (entry.Address.AddressFamily != AddressFamily.InterNetwork) continue;
                     if (IPAddress.IsLoopback(entry.Address)) continue;
 
+                    // 169.254.x is what Windows gives an interface that asked for an address and
+                    // got no answer. Nothing is on the other side of it, least of all a router,
+                    // and a search from it is where "no router answered" came from at startup.
+                    var octets = entry.Address.GetAddressBytes();
+                    if (octets[0] == 169 && octets[1] == 254)
+                    {
+                        Log.Info($"{entry.Address} is not searched from: it is the address Windows " +
+                                 "invents while an interface waits for one, and nothing answers on it");
+                        continue;
+                    }
+
                     found.Add(entry.Address);
                 }
             }
@@ -263,7 +314,8 @@ internal sealed class PortForwarding : IAsyncDisposable
                 _controlUrl = new Uri(new Uri(location), control.Groups[1].Value).ToString();
                 _serviceType = service;
 
-                Log.Info($"a router that forwards ports answered at {location}");
+                Log.Info($"a router that forwards ports answered at {location}; this machine is " +
+                         $"{_localAddress} to it");
                 return true;
             }
         }

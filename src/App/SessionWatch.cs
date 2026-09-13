@@ -19,6 +19,11 @@ internal sealed class SessionWatch : IDisposable
     // Raised when streaming becomes possible or stops being possible.
     internal event Action<SessionWatch>? Changed;
 
+    // Raised with the reason when the machine itself is going: to sleep, off, or signed out.
+    // Nothing outlives any of the three, and the seconds before they happen are all there is in
+    // which to end a stream properly.
+    internal event Action<string>? Leaving;
+
     internal SessionWatch()
     {
         _suspended = PlatformGuard.IsRemoteSession;
@@ -26,6 +31,11 @@ internal sealed class SessionWatch : IDisposable
         // The session can be taken and given back while the server runs, and nothing else tells it
         // so.
         SystemEvents.SessionSwitch += OnSessionSwitch;
+
+        // Sleep and shutdown take the screen away without any session switch to say so. Windows
+        // asks first and stops running code a moment later, which is the whole of the warning.
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        SystemEvents.SessionEnding += OnSessionEnding;
     }
 
     // true while this session belongs to a remote desktop connection.
@@ -119,12 +129,52 @@ internal sealed class SessionWatch : IDisposable
 
     private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
     {
-        Settle($"the session changed ({e.Reason})");
+        // Written whether or not it changed anything. A lock, an unlock and a sign-out all arrive
+        // here, and which of them was the last thing to happen is the question a worker that
+        // vanished a second later raises. The ones that change the picture say more, below.
+        if (!Settle($"the session changed ({e.Reason})"))
+            Log.Info($"the session changed ({e.Reason}); there is still " +
+                     (IsRemote ? "no screen here to capture" : "a screen here to capture"));
+    }
+
+    // Sleep, and waking from it. A stream cannot survive a suspend: the encoder's device goes,
+    // the network goes, and the client is left sending to a machine that answers nothing.
+    private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+    {
+        switch (e.Mode)
+        {
+            case PowerModes.Suspend:
+                // A client told the stream ended puts its own screen away and comes back later. One
+                // that is not told sits on a frozen picture until its timeout, blaming this server.
+                Log.Event("this machine is going to sleep; anything streaming is ended first, " +
+                          "while there is still a moment in which to say so.");
+                Leaving?.Invoke("this machine is going to sleep");
+                break;
+
+            case PowerModes.Resume:
+                // The screen, the encoder and the sound all come back on their own, and a client
+                // may reconnect at once. Whether there is a console to capture is asked again,
+                // because a machine can be woken by a remote desktop connection.
+                if (!Settle("this machine woke up"))
+                    Log.Event("this machine woke up; " + Describe());
+
+                break;
+        }
+    }
+
+    // Signing out and shutting down. Windows ends every process in the session seconds after this,
+    // this one included, so the stream is taken down here rather than left to be cut off.
+    private void OnSessionEnding(object sender, SessionEndingEventArgs e)
+    {
+        Leaving?.Invoke(e.Reason == SessionEndReasons.SystemShutdown
+            ? "this machine is shutting down"
+            : "this session is being signed out");
     }
 
     // Asks Windows again and says so when the answer turned over. Every session switch can change
-    // it, and asking is cheaper than working out from the reason which of them did.
-    private void Settle(string what)
+    // it, and asking is cheaper than working out from the reason which of them did. Answers
+    // whether it did.
+    private bool Settle(string what)
     {
         var suspended = PlatformGuard.IsRemoteSession;
 
@@ -135,12 +185,13 @@ internal sealed class SessionWatch : IDisposable
             _suspended = suspended;
         }
 
-        if (!changed) return;
+        if (!changed) return false;
 
         // An event, not a warning: this is what the server was asked to sit through, and it is
         // said only when the answer to "can the console be streamed" actually turned over.
         Log.Event($"{what}. {Describe()}");
         Changed?.Invoke(this);
+        return true;
     }
 
     public void Dispose()
@@ -149,5 +200,7 @@ internal sealed class SessionWatch : IDisposable
         _disposed = true;
 
         SystemEvents.SessionSwitch -= OnSessionSwitch;
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.SessionEnding -= OnSessionEnding;
     }
 }
