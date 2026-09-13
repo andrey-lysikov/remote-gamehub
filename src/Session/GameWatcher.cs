@@ -286,6 +286,24 @@ internal sealed class GameWatcher : IDisposable
     // the process runs from the game's own folder, since it can be the store's client instead.
     internal void StopGame()
     {
+        // The watch stops first. It replaces and disposes the process it holds as it goes, and a
+        // process taken from under it mid-poll is one that answers "no process is associated".
+        _stopping.Cancel();
+        if (_thread != Thread.CurrentThread) _thread.Join(2000);
+
+        // Not held at this moment, though the game was seen: what is full-screen now is it.
+        if (_game is null && HasStarted && TryFullscreenWindow(out var processId) && processId != 0)
+        {
+            try
+            {
+                _game = Process.GetProcessById((int)processId);
+            }
+            catch (Exception)
+            {
+                // Gone already, or not a process this one may open.
+            }
+        }
+
         var game = _game;
         if (game is null)
         {

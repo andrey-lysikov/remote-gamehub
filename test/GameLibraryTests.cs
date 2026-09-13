@@ -99,6 +99,78 @@ public class GameLibraryTests
     }
 
     [Fact]
+    public void Saving_only_the_switches_leaves_a_game_the_scanners()
+    {
+        using var folder = new TestFolder();
+        using var database = Database.Open(folder.Path);
+        var library = new GameLibrary(database);
+
+        var games = Path.Combine(folder.Path, "games");
+        folder.File(@"games\Alpha\alpha.exe");
+        library.Rescan(FoldersOnly(games));
+
+        // What the editor sends when only the quality or the pointer was changed.
+        var row = library.Details().Single();
+        library.Save(row.Id, row.Title, row.LaunchCommand, row.InstallPath);
+
+        Assert.False(library.Details().Single().Manual);
+    }
+
+    [Fact]
+    public void A_removed_edit_does_not_hold_back_the_game_the_scan_finds()
+    {
+        using var folder = new TestFolder();
+        using var database = Database.Open(folder.Path);
+        var library = new GameLibrary(database);
+
+        var games = Path.Combine(folder.Path, "games");
+        var alpha = folder.File(@"games\Alpha\alpha.exe");
+        library.Rescan(FoldersOnly(games));
+
+        // Edited to start something else under the same name, then taken off the list.
+        var row = library.Details().Single();
+        library.Save(row.Id, "Alpha", @"C:\elsewhere\alpha.exe", row.InstallPath);
+        library.Remove(row.Id);
+
+        library.Rescan(FoldersOnly(games));
+
+        var detail = Assert.Single(library.Details());
+        Assert.False(detail.Manual);
+        Assert.Equal(alpha, detail.LaunchCommand);
+    }
+
+    [Fact]
+    public void A_reset_game_is_listed_again_as_the_scan_finds_it()
+    {
+        using var folder = new TestFolder();
+        using var database = Database.Open(folder.Path);
+        var library = new GameLibrary(database);
+
+        var games = Path.Combine(folder.Path, "games");
+        folder.File(@"games\Alpha\alpha.exe");
+        library.Rescan(FoldersOnly(games));
+
+        var row = library.Details().Single();
+        library.Save(row.Id, "Alpha, renamed", row.LaunchCommand, row.InstallPath);
+        library.RecordQuality(row.Id, StreamQuality.Low);
+
+        Assert.StartsWith("Reset.", library.Reset(row.Id));
+        Assert.Empty(library.Details());
+
+        library.Rescan(FoldersOnly(games));
+
+        var detail = Assert.Single(library.Details());
+        Assert.Equal("Alpha", detail.Title);
+        Assert.False(detail.Manual);
+        Assert.Equal(StreamQuality.High, detail.Quality);
+
+        // Nothing to go back to for a game somebody added.
+        var added = library.Save(0, "Dolphin", "steam://rungameid/12345", null);
+        Assert.DoesNotContain("Reset.", library.Reset(added));
+        Assert.Contains(library.Details(), game => game.Id == added);
+    }
+
+    [Fact]
     public void What_was_typed_on_the_page_outlives_the_scan()
     {
         using var folder = new TestFolder();

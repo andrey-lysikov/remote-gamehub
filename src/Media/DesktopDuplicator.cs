@@ -594,10 +594,22 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         }
         catch (Exception error)
         {
-            Log.Info($"the desktop is not available yet: {error.Message}");
+            // Asked five times a second while the screen is elsewhere: said when the answer
+            // changes, and otherwise every ten seconds, not in every attempt.
+            if (error.Message != _lastReopenFailure || _reopenFailureSaid.Elapsed >= ReopenFailureRepeat)
+            {
+                Log.Info($"the desktop is not available yet: {error.Message}");
+                _lastReopenFailure = error.Message;
+                _reopenFailureSaid.Restart();
+            }
+
             return ReopenOutcome.Failed;
         }
     }
+
+    private static readonly TimeSpan ReopenFailureRepeat = TimeSpan.FromSeconds(10);
+    private string? _lastReopenFailure;
+    private readonly System.Diagnostics.Stopwatch _reopenFailureSaid = new();
 
     // Turns the one failure everybody meets into an explanation. DuplicateOutput refuses
     // for several unrelated reasons and returns the same kind of code for all of them.

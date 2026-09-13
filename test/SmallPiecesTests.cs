@@ -76,45 +76,13 @@ public class SmallPiecesTests
     }
 
     [Fact]
-    public void A_battle_net_game_is_started_by_its_product_code_not_its_page()
+    public void A_battle_net_game_is_started_by_its_uid_not_its_page()
     {
-        Assert.Equal(@"""C:\Battle.net\Battle.net.exe"" --exec=""launch Fen""",
-                     LauncherScanners.BattleNetLaunch(@"C:\Battle.net\Battle.net.exe", "Fen", "fenris"));
+        Assert.Equal(@"""C:\Battle.net\Battle.net.exe"" --exec=""launch_uid s2""",
+                     LauncherScanners.BattleNetLaunch(@"C:\Battle.net\Battle.net.exe", "s2"));
 
-        // Without the launcher or the code, the page is what there is.
-        Assert.Equal("battlenet://fenris",
-                     LauncherScanners.BattleNetLaunch(@"C:\Battle.net\Battle.net.exe", null, "fenris"));
-        Assert.Equal("battlenet://fenris", LauncherScanners.BattleNetLaunch(null, "Fen", "fenris"));
-    }
-
-    [Fact]
-    public void Battle_net_product_codes_are_read_from_its_own_product_db()
-    {
-        // Two installs as the agent writes them, with a number field in between that is not ours.
-        var data = Field(1, Concat(Text(1, "fenris"), Text(2, "Fen"),
-                                   Field(3, Text(1, "D:/Games/Diablo IV")), new byte[] { 0x20, 0x01 }))
-            .Concat(Field(1, Concat(Text(1, "wow_enus"), Text(2, "wow"))))
-            .Concat(Field(1, Text(1, "agent")))
-            .ToArray();
-
-        var products = LauncherScanners.ReadProductDb(data);
-
-        Assert.Equal(2, products.Count);
-        Assert.Equal(new LauncherScanners.BattleNetProduct("fenris", "Fen", "D:/Games/Diablo IV"),
-                     products[0]);
-
-        // By folder, whatever the slashes; by uid without its language otherwise.
-        Assert.Equal("Fen", LauncherScanners.ProductFor(products, "other", @"D:\Games\Diablo IV\")?.Code);
-        Assert.Equal("wow", LauncherScanners.ProductFor(products, "wow", null)?.Code);
-        Assert.Null(LauncherScanners.ProductFor(products, "prometheus", @"C:\Overwatch"));
-
-        // Not a protocol buffer at all: nothing, rather than an exception.
-        Assert.Empty(LauncherScanners.ReadProductDb(new byte[] { 0x0A, 0xFF, 0xFF }));
-
-        static byte[] Text(int field, string text) => Field(field, System.Text.Encoding.UTF8.GetBytes(text));
-        static byte[] Field(int field, byte[] value) =>
-            new[] { (byte)(field << 3 | 2), (byte)value.Length }.Concat(value).ToArray();
-        static byte[] Concat(params byte[][] parts) => parts.SelectMany(part => part).ToArray();
+        // Without the launcher, the page is what there is.
+        Assert.Equal("battlenet://s2", LauncherScanners.BattleNetLaunch(null, "s2"));
     }
 
     [Fact]

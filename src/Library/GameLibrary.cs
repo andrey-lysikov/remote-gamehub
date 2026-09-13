@@ -423,7 +423,10 @@ internal sealed class GameLibrary
         lock (_database.Gate)
         {
             using var command = _database.Command(
-                "SELECT id, title, launch_command, install_path FROM games WHERE manual = 1;");
+                // Only the ones on the list: a row somebody removed is not a claim on its title,
+                // or the scan would bring the edited row back in place of the game it finds.
+                "SELECT id, title, launch_command, install_path FROM games " +
+                "WHERE manual = 1 AND removed_at IS NULL;");
 
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -522,6 +525,25 @@ internal sealed class GameLibrary
         {
             if (id > 0)
             {
+                // The switches below the name are recorded on their own and are not an edit of
+                // what the scan found: a game whose name, command and folder are as they were is
+                // left the scanner's, or changing its quality would freeze it at this scan.
+                using (var current = _database.Command(
+                           "SELECT title, launch_command, install_path, removed_at FROM games WHERE id = $id;"))
+                {
+                    current.Parameters.AddWithValue("$id", id);
+                    using var reader = current.ExecuteReader();
+
+                    if (reader.Read() &&
+                        reader.GetString(0) == title &&
+                        reader.GetString(1) == launchCommand &&
+                        (reader.IsDBNull(2) ? null : reader.GetString(2)) == install &&
+                        reader.IsDBNull(3))
+                    {
+                        return id;
+                    }
+                }
+
                 using var update = _database.Command(
                     "UPDATE games SET title = $title, launch_command = $launch, " +
                     // Editing a game that had gone is how somebody says it is back — the row is
@@ -583,6 +605,48 @@ internal sealed class GameLibrary
 
         Log.Info($"\"{title ?? id.ToString(CultureInfo.InvariantCulture)}\" was taken off the list. " +
                  $"What was edited about it is kept for {KeepRemoved.TotalDays:0} days.");
+    }
+
+    // Puts a game back as its store found it: the row goes, with any hidden one the scan would
+    // otherwise meet again under the same command or identifier, and the next scan writes it
+    // anew — the found name, command and folder, no cover chosen, every switch at its default.
+    // A game added by hand has nothing to go back to and is refused. The cover file is left for
+    // the sweep of pictures that belong to no game.
+    internal string Reset(long id)
+    {
+        lock (_database.Gate)
+        {
+            string source, title, launch;
+            string? external;
+
+            using (var read = _database.Command(
+                       "SELECT source, title, launch_command, external_id FROM games WHERE id = $id;"))
+            {
+                read.Parameters.AddWithValue("$id", id);
+                using var reader = read.ExecuteReader();
+                if (!reader.Read()) return "There is no such game.";
+
+                source = reader.GetString(0);
+                title = reader.GetString(1);
+                launch = reader.GetString(2);
+                external = reader.IsDBNull(3) ? null : reader.GetString(3);
+            }
+
+            if (source == "by hand")
+                return "This game was added by hand; there is nothing to reset it to.";
+
+            using var delete = _database.Command(
+                "DELETE FROM games WHERE id = $id OR (removed_at IS NOT NULL AND source = $source " +
+                "AND (launch_command = $launch OR (external_id IS NOT NULL AND external_id = $external)));");
+            delete.Parameters.AddWithValue("$id", id);
+            delete.Parameters.AddWithValue("$source", source);
+            delete.Parameters.AddWithValue("$launch", launch);
+            delete.Parameters.AddWithValue("$external", (object?)external ?? DBNull.Value);
+            delete.ExecuteNonQuery();
+
+            Log.Info($"\"{title}\" was reset; the scan will list it again as {source} finds it");
+            return "Reset. The game is being scanned again…";
+        }
     }
 
     internal string? BoxArtPath(long gameId)

@@ -307,6 +307,17 @@ internal sealed class WebConsole : IAsyncDisposable
             return;
         }
 
+        // Back to what the store found, then the scan that writes it so. Returns at once, like
+        // Rescan: the page fetches the list again when the scan has had time to finish.
+        if (request.Query("reset") is { } resetId && long.TryParse(resetId, out var toReset))
+        {
+            var said = _games.Reset(toReset);
+            if (said.StartsWith("Reset.", StringComparison.Ordinal)) Rescan?.Invoke("a game was reset");
+
+            await WriteAsync(stream, 200, "text/plain", said);
+            return;
+        }
+
         if (request.Query("save") is { } saveId && long.TryParse(saveId, out var toSave))
         {
             var title = (request.Query("title") ?? string.Empty).Trim();
@@ -464,7 +475,15 @@ internal sealed class WebConsole : IAsyncDisposable
             // game that is running is the one action here worth not having to aim for.
             html.Append($"<button data-do=stop title=\"Stop\" class=stop>{StopIcon}</button>");
 
-            html.Append("<div class=tools>" +
+            // Reset only where there is something to reset: a store's game changed in any way on
+            // this page. A game added by hand has no found state to go back to.
+            var changedHere = game.Manual || game.ArtManual || game.Pointer ||
+                              game.Quality != StreamQuality.High || !game.ShowCard;
+            var reset = game.Source != "by hand" && changedHere
+                ? $"<button data-do=reset title=\"Reset to what was found\">{ResetIcon}</button>"
+                : string.Empty;
+
+            html.Append("<div class=tools>" + reset +
                         $"<button data-do=edit title=\"Edit\">{PencilIcon}</button>" +
                         $"<button data-do=remove title=\"Remove\" class=danger>{TrashIcon}</button>" +
                         "</div>");
@@ -815,6 +834,10 @@ internal sealed class WebConsole : IAsyncDisposable
     private const string TrashIcon =
         "<svg viewBox=\"0 0 24 24\" aria-hidden=true><path d=\"M5 7h14M10 7V5h4v2M6 7l1 13h10l1-13\"/>" +
         "<path d=\"M10 11v6M14 11v6\"/></svg>";
+
+    private const string ResetIcon =
+        "<svg viewBox=\"0 0 24 24\" aria-hidden=true><path d=\"M4 12a8 8 0 1 0 2.3-5.6\"/>" +
+        "<path d=\"M4 4v5h5\"/></svg>";
 
     private const string StopIcon =
         "<svg viewBox=\"0 0 24 24\" aria-hidden=true><rect x=6 y=6 width=12 height=12 rx=2/></svg>";

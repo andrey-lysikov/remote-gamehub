@@ -164,6 +164,11 @@ tile.dataset.folder,tile.dataset.pointer,tile.dataset.quality,tile.dataset.card)
 if(button.dataset.do==='remove'){
 if(!confirm('Remove '+tile.dataset.title+' from the list?'))return;
 await fetch('/?remove='+tile.dataset.id);await reload();return;}
+// Reset: the row goes and a scan writes it again, so the list is fetched twice, as after Rescan.
+if(button.dataset.do==='reset'){
+if(!confirm('Reset '+tile.dataset.title+' to what was found? Its name, command, folder, cover and settings go back to the defaults.'))return;
+button.disabled=true;scansaid.textContent=await (await fetch('/?reset='+tile.dataset.id)).text();
+setTimeout(reload,2000);setTimeout(()=>{reload();scansaid.textContent='';},6000);return;}
 if(button.dataset.do==='stop'){
 if(!confirm('Stop '+tile.dataset.title+'?'))return;
 await fetch('/?stop=1');await reload();}});
