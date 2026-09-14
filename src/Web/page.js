@@ -78,22 +78,21 @@ $('rescan').addEventListener('click',async e=>{const b=e.target;b.disabled=true;
 scansaid.textContent=await (await fetch('/?rescan=1')).text();
 setTimeout(reload,2000);
 setTimeout(()=>{reload();scansaid.textContent='';b.disabled=false;},6000);});
-// Check version. One request at a time: GitHub allows sixty an hour without a token, and a
-// few impatient clicks should not spend them. The answer stays on the link for a few seconds;
-// a newer version also appears on the host line with the next status poll.
+// Has new version?, one request at a time (GitHub allows sixty an hour). The answer stays on the
+// link a few seconds; a newer version also shows on the host line at the next poll.
 const checkversion=$('checkversion');
 checkversion.addEventListener('click',async e=>{e.preventDefault();
 if(checkversion.dataset.busy)return;checkversion.dataset.busy='1';
 checkversion.textContent='Checking…';
 try{checkversion.textContent=await (await fetch('/?checkupdate=1')).text();}
 catch{checkversion.textContent='Check failed';}
-setTimeout(()=>{checkversion.textContent='Check version';delete checkversion.dataset.busy;},5000);});
+setTimeout(()=>{checkversion.textContent='Has new version?';delete checkversion.dataset.busy;},5000);});
 function open(id,name,starts,from,pointerOn,level,cardOn){editing=id;
 $('editortitle').textContent=id?'Edit game':'Add a game';
 title.value=name||'';command.value=starts||'';folder.value=from||'';
 quality.value=level===undefined?2:level;
 if(window.pointer)pointer.checked=pointerOn==='1';
-startcard.checked=cardOn!=='0';
+(document.querySelector('#splash input[value="'+cardOn+'"]')||document.querySelector('#splash input[value="1"]')).checked=true;
 editorsaid.textContent='';
 // A game that does not exist yet has nowhere to put a cover, so that half of the window is
 // shown only once there is a row to attach one to.
@@ -104,7 +103,7 @@ $('cancel').addEventListener('click',()=>editor.close());
 $('save').addEventListener('click',async()=>{
 if(!title.value.trim()||!command.value.trim()){
 editorsaid.textContent='A game needs a name and something to start.';return;}
-const r=await fetch('/?save='+editing+'&title='+encodeURIComponent(title.value)+'&command='+encodeURIComponent(command.value)+'&folder='+encodeURIComponent(folder.value)+'&pointer='+(window.pointer&&pointer.checked?1:0)+'&quality='+quality.value+'&card='+(startcard.checked?1:0));
+const r=await fetch('/?save='+editing+'&title='+encodeURIComponent(title.value)+'&command='+encodeURIComponent(command.value)+'&folder='+encodeURIComponent(folder.value)+'&pointer='+(window.pointer&&pointer.checked?1:0)+'&quality='+quality.value+'&card='+document.querySelector('#splash input:checked').value);
 editorsaid.textContent=await r.text();await reload();editor.close();});
 // --- the cover picker ---
 // Searched at once for the editor's name; a portrait that does not exist falls back once.

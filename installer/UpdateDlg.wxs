@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- The update's pages, shown instead of a first install's once an elevated copy has found the server
+     installed (UPDATEMODE). Geometry as ShortcutsDlg, so a page does not jump. -->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI>
+      <Dialog Id="UpdateDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes"
+                 NoPrefix="yes" Text="{\WixUI_Font_Title}Update [ProductName]" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
+                 Transparent="yes" NoPrefix="yes" Text="[ProductName] is already installed on this computer." />
+
+        <Control Id="Where" Type="Text" X="20" Y="55" Width="330" Height="30" NoPrefix="yes"
+                 Text="It will be updated to version [ProductVersion] where it is installed:&#10;[APPLICATIONFOLDER]" />
+
+        <Control Id="Note" Type="Text" X="20" Y="95" Width="330" Height="60" Transparent="yes" NoPrefix="yes"
+                 Text="The server stops while its files are replaced and starts again on its own. A stream in progress ends; it can be started again from the client a few seconds later.&#10;&#10;Advanced changes the shortcuts; everything else stays as it is." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Advanced" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="&amp;Advanced">
+          <Publish Event="NewDialog" Value="UpdateOptionsDlg" />
+        </Control>
+        <Control Id="Update" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes"
+                 Text="&amp;Update">
+          <Publish Event="AddLocal" Value="StartMenu" Condition="UPDSTARTMENU = 1" />
+          <Publish Event="Remove" Value="StartMenu" Condition="UPDSTARTMENU &lt;&gt; 1" />
+          <Publish Event="AddLocal" Value="Desktop" Condition="UPDDESKTOP = 1" />
+          <Publish Event="Remove" Value="Desktop" Condition="UPDDESKTOP &lt;&gt; 1" />
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes"
+                 Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <!-- Advanced: the two shortcuts, ticked as the copy being updated has them. The driver pages and
+           the start after installing are a first install's questions; an update always starts it. -->
+      <Dialog Id="UpdateOptionsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes"
+                 NoPrefix="yes" Text="{\WixUI_Font_Title}Shortcuts" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
+                 Transparent="yes" NoPrefix="yes" Text="Where [ProductName] can be started from after the update." />
+
+        <Control Id="StartMenuCheckBox" Type="CheckBox" X="20" Y="55" Width="330" Height="15"
+                 Property="UPDSTARTMENU" CheckBoxValue="1"
+                 Text="A shortcut in the Start menu" />
+        <Control Id="DesktopCheckBox" Type="CheckBox" X="20" Y="71" Width="330" Height="15"
+                 Property="UPDDESKTOP" CheckBoxValue="1"
+                 Text="A shortcut on the desktop" />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="UpdateDlg" />
+        </Control>
+        <Control Id="Update" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes"
+                 Text="&amp;Update">
+          <Publish Event="AddLocal" Value="StartMenu" Condition="UPDSTARTMENU = 1" />
+          <Publish Event="Remove" Value="StartMenu" Condition="UPDSTARTMENU &lt;&gt; 1" />
+          <Publish Event="AddLocal" Value="Desktop" Condition="UPDDESKTOP = 1" />
+          <Publish Event="Remove" Value="Desktop" Condition="UPDDESKTOP &lt;&gt; 1" />
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes"
+                 Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <!-- Removal of the copy the service runs: Remove hands over to msiexec /x elevated, as the update does.
+           RelaunchElevated's inverted exit ends this window when that started, or falls to AdminNeededDlg. -->
+      <Dialog Id="RemoveElevatedDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="280" Height="15" Transparent="yes"
+                 NoPrefix="yes" Text="{\WixUI_Font_Title}Remove [ProductName]" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
+                 Transparent="yes" NoPrefix="yes" Text="Administrator rights are asked for when you click Remove." />
+
+        <Control Id="Note" Type="Text" X="20" Y="55" Width="330" Height="60" Transparent="yes" NoPrefix="yes"
+                 Text="[ProductName] is removed together with the service that runs its server, and removing a service takes administrator rights. A stream in progress ends." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="MaintenanceTypeDlg" />
+        </Control>
+        <Control Id="Remove" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes"
+                 Text="&amp;Remove">
+          <Publish Property="ELEVATIONREQUESTED" Value="1" Order="1" />
+          <Publish Property="WixQuietExecCmdLine" Order="2"
+                   Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Start-Process -FilePath '[System64Folder]msiexec.exe' -Verb RunAs -ArgumentList '/x [ProductCode] /qb ELEVATED=1' -ErrorAction SilentlyContinue; exit (0 + $?)&quot;" />
+          <Publish Event="DoAction" Value="RelaunchElevated" Order="3" />
+          <Publish Event="SpawnDialog" Value="AdminNeededDlg" Order="4" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes"
+                 Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <!-- Shown by the unelevated window when the prompt for administrator rights was declined. -->
+      <Dialog Id="AdminNeededDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="280" Height="15" Transparent="yes"
+                 NoPrefix="yes" Text="{\WixUI_Font_Title}Administrator rights are needed" />
+
+        <Control Id="Note" Type="Text" X="20" Y="55" Width="330" Height="60" Transparent="yes" NoPrefix="yes"
+                 Text="Updating or removing [ProductName] stops its server and changes the service that runs it, which takes administrator rights. They were not given, so nothing has been changed.&#10;&#10;Run the installer again to try once more." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Close" Type="PushButton" X="304" Y="243" Width="56" Height="17" Default="yes" Cancel="yes"
+                 Text="&amp;Close">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+    </UI>
+  </Fragment>
+</Wix>

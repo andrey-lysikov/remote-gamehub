@@ -87,29 +87,57 @@
       </DirectorySearch>
     </Property>
 
+    <!-- The command line of the one machine-wide service: which copy of the server it runs, readable
+         by every user. A copy in somebody else's profile shows up here, and nowhere else. -->
+    <Property Id="SERVICEIMAGEPATH">
+      <RegistrySearch Id="ServiceImageSearch" Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\RemoteGameHub" Name="ImagePath"
+                      Type="raw" Bitness="always64" />
+    </Property>
+
+    <!-- Whether this user's copy has the virtual display setting on: its component's own registry mark. -->
+    <Property Id="VDDSETTING">
+      <RegistrySearch Id="VirtualDisplaySettingSearch" Root="HKCU" Key="Software\Remote-Gamehub"
+                      Name="VirtualDisplaySetting" Type="raw" />
+    </Property>
+
+    <!-- An update: a copy in Program Files, or this user's own. It asks for administrator rights up
+         front and shows the update page instead of the choices of a first install. -->
+    <SetProperty Action="SetUpdateMode" Id="UPDATEMODE" Value="1" After="AppSearch" Sequence="both"
+                 Condition="NOT Installed AND (WIX_UPGRADE_DETECTED OR PERMACHINECOPY OR PERUSERCOPY OR SERVICEIMAGEPATH ~&gt;&lt; LocalAppDataFolder)" />
+
+    <!-- The service runs this very copy: removing it must take the service too, which needs rights. -->
+    <SetProperty Action="SetServiceIsMine" Id="SERVICEISMINE" Value="1" After="CostFinalize" Sequence="both"
+                 Condition="SERVICEIMAGEPATH AND ((INSTALLEDFOLDER AND SERVICEIMAGEPATH ~&gt;&lt; INSTALLEDFOLDER) OR (APPLICATIONFOLDER AND SERVICEIMAGEPATH ~&gt;&lt; APPLICATIONFOLDER))" />
+
+    <!-- Nothing of this user's, but the service runs a copy from another profile: this user may only
+         install into their own profile, never Program Files. -->
+    <SetProperty Action="SetOtherUserCopy" Id="OTHERUSERCOPY" Value="1" After="SetUpdateMode" Sequence="both"
+                 Condition="NOT Installed AND NOT UPDATEMODE AND SERVICEIMAGEPATH AND NOT (SERVICEIMAGEPATH ~&gt;&lt; ProgramFiles64Folder) AND NOT (SERVICEIMAGEPATH ~&gt;&lt; LocalAppDataFolder)" />
+
     <!-- An upgrade keeps the scope it finds: changed halfway, it leaves two servers on one pair of
-         ports, since neither scope can remove the other. AppSearch at 50 settles this in time. -->
+         ports, since neither scope can remove the other. A copy in Program Files always wins. -->
     <SetProperty Action="SetPerMachineUpgrade" Id="WixAppFolder" Value="WixPerMachineFolder"
-                 After="AppSearch" Sequence="both"
-                 Condition="WIX_UPGRADE_DETECTED AND PERMACHINECOPY" />
+                 After="SetOtherUserCopy" Sequence="both"
+                 Condition="PERMACHINECOPY" />
 
     <!-- Program Files wins when both are somehow there — the state this rule exists to stop. It is
          the copy an elevated install can actually replace, and the one nobody can clear by hand. -->
     <SetProperty Action="SetPerUserUpgrade" Id="WixAppFolder" Value="WixPerUserFolder"
-                 After="AppSearch" Sequence="both"
-                 Condition="WIX_UPGRADE_DETECTED AND PERUSERCOPY AND NOT PERMACHINECOPY" />
+                 After="SetAllUsersForUpgrade" Sequence="both"
+                 Condition="(UPDATEMODE OR OTHERUSERCOPY) AND NOT PERMACHINECOPY" />
 
     <!-- What the scope page would have published: the stock actions at 998 and 999 read ALLUSERS
          and Privileged and nothing else, while WixAppFolder above only dresses the pages. -->
     <SetProperty Action="SetAllUsersForUpgrade" Id="ALLUSERS" Value="1"
                  After="SetPerMachineUpgrade" Sequence="both"
-                 Condition="WIX_UPGRADE_DETECTED AND PERMACHINECOPY" />
+                 Condition="PERMACHINECOPY" />
 
     <!-- Cleared rather than left at 2, which the stock pair reads as "an administrator, so Program
          Files": an upgrade of a copy in the profile must stay there whoever runs it. -->
     <SetProperty Action="ClearAllUsersForUpgrade" Id="ALLUSERS" Value="{}"
                  After="SetPerUserUpgrade" Sequence="both"
-                 Condition="WIX_UPGRADE_DETECTED AND PERUSERCOPY AND NOT PERMACHINECOPY" />
+                 Condition="(UPDATEMODE OR OTHERUSERCOPY) AND NOT PERMACHINECOPY" />
 
     <!-- A first install goes into the profile too; the stock set would decide Program Files for
          anybody elevated. A scope named on the command line is left alone. -->
@@ -221,19 +249,22 @@
       <Feature Id="StartMenu" Title="Start menu shortcut"
                Description="A shortcut in the Start menu." Level="1">
         <ComponentGroupRef Id="StartMenuShortcutFiles" />
-        <Level Value="0" Condition="INSTALLSTARTMENUSHORTCUT &lt;&gt; 1" />
+        <!-- A first install's checkboxes only: an update carries every feature over from the copy it
+             replaces (MigrateFeatureStates), and its own page switches the two shortcuts. -->
+        <Level Value="0" Condition="NOT UPDATEMODE AND INSTALLSTARTMENUSHORTCUT &lt;&gt; 1" />
       </Feature>
 
       <Feature Id="Desktop" Title="Desktop shortcut"
                Description="A shortcut on the desktop." Level="1">
         <ComponentGroupRef Id="DesktopShortcutFiles" />
-        <Level Value="0" Condition="INSTALLDESKTOPSHORTCUT &lt;&gt; 1" />
+        <Level Value="0" Condition="NOT UPDATEMODE AND INSTALLDESKTOPSHORTCUT &lt;&gt; 1" />
       </Feature>
 
       <Feature Id="VirtualDisplaySetting" Title="Virtual display driver"
                Description="Turns on [General] VirtualDisplay in the configuration file." Level="1">
         <ComponentGroupRef Id="VirtualDisplayConfigFiles" />
-        <Level Value="0" Condition="INSTALLVDD &lt;&gt; 1" />
+        <!-- Not migrated: versions before it had no such feature, and it would come back switched on. -->
+        <Level Value="0" Condition="(NOT UPDATEMODE AND INSTALLVDD &lt;&gt; 1) OR (UPDATEMODE AND NOT VDDSETTING)" />
       </Feature>
 
     </Feature>
@@ -266,15 +297,79 @@
                   Impersonate="no"
                   Return="ignore" />
 
+    <!-- An update stops the server before the old copy is removed: the service ends its worker, and the
+         wait lets both let go of the exe. Immediate, as nothing deferred may precede RemoveExistingProducts. -->
+    <SetProperty Action="SetStopServer" Id="WixQuietExecCmdLine" Sequence="execute" Before="StopServer"
+                 Condition="UPDATEMODE AND NOT REMOVE~=&quot;ALL&quot;"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Stop-Service -Name RemoteGameHub -ErrorAction SilentlyContinue; Wait-Process -Name Remote-Gamehub -Timeout 15 -ErrorAction SilentlyContinue; exit 0&quot;" />
+    <CustomAction Id="StopServer" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_X64"
+                  Execute="immediate" Return="ignore" />
+
+    <!-- And starts the new one once its files are in: install-service makes or re-points the service
+         and starts it, and the service starts the worker where the person is. -->
+    <SetProperty Id="StartServer" Sequence="execute" Before="StartServer"
+                 Condition="UPDATEMODE AND NOT REMOVE~=&quot;ALL&quot;"
+                 Value="&quot;[#RemoteGameHubExe]&quot; install-service" />
+    <CustomAction Id="StartServer" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_X64"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
     <InstallExecuteSequence>
-      <!-- Before RemoveFiles, on uninstall and on the removal half of an upgrade. Losing the service
-           in an upgrade costs nothing: the new server makes it again at its first start. -->
-      <Custom Action="RemoveService" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="StopServer" Before="RemoveExistingProducts"
+              Condition="UPDATEMODE AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="StartServer" After="InstallFiles"
+              Condition="UPDATEMODE AND NOT REMOVE~=&quot;ALL&quot;" />
+
+      <!-- On a real uninstall, and only while the service runs this copy: one running another user's
+           copy is theirs. An update keeps the service and StartServer re-points it. -->
+      <Custom Action="RemoveService" Before="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND SERVICEISMINE" />
       <!-- On a real uninstall only: an upgrade removes the older version with REMOVE=ALL as well, and
            UPGRADINGPRODUCTCODE is set on exactly that removal and on no other. -->
       <Custom Action="RemoveAutostartTask" Before="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
+
+    <!-- An update asks for administrator rights before its first page: this same package again, elevated,
+         with ELEVATED=1 so it does not ask twice. This window then closes without a word. -->
+    <SetProperty Id="ELEVATIONREQUESTED" Value="1" Sequence="ui" Before="RelaunchElevated"
+                 Condition="UPDATEMODE AND NOT ELEVATED AND UILevel = 5" />
+    <SetProperty Id="WixQuietExecCmdLine" Sequence="ui" Before="RelaunchElevated"
+                 Condition="UPDATEMODE AND NOT ELEVATED AND UILevel = 5"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Start-Process -FilePath '[System64Folder]msiexec.exe' -Verb RunAs -ArgumentList '/i \&quot;[OriginalDatabase]\&quot; ELEVATED=1' -ErrorAction SilentlyContinue; exit (0 + $?)&quot;" />
+
+    <!-- Exits 1 when the elevated copy started, which fails this action and ends this window through
+         the silenced FatalError; 0 when the prompt was declined, which goes on to AdminNeededDlg. -->
+    <CustomAction Id="RelaunchElevated" DllEntry="WixQuietExec" BinaryRef="Wix4UtilCA_X64"
+                  Execute="immediate" Return="check" />
+
+    <!-- Which of the two shortcuts the copy being updated has, for the update's own checkboxes. -->
+    <SetProperty Id="UPDSTARTMENU" Value="1" Sequence="ui" After="MigrateFeatureStates"
+                 Condition="UPDATEMODE AND &amp;StartMenu = 3" />
+    <SetProperty Id="UPDDESKTOP" Value="1" Sequence="ui" After="MigrateFeatureStates"
+                 Condition="UPDATEMODE AND &amp;Desktop = 3" />
+
+    <!-- The stock welcome and maintenance pages cannot be overridden, so an update walks past them:
+         Installed hides the first, PATCH the second, and both are cleared again before UpdateDlg. -->
+    <SetProperty Action="HideWelcomeForUpdate" Id="Installed" Value="1" Sequence="ui"
+                 Before="AdvancedWelcomeEulaDlg" Condition="UPDATEMODE AND NOT Installed AND NOT ELEVATIONREQUESTED" />
+    <SetProperty Action="HideMaintenanceForUpdate" Id="PATCH" Value="1" Sequence="ui"
+                 After="AdvancedWelcomeEulaDlg" Condition="UPDATEMODE AND NOT ELEVATIONREQUESTED" />
+    <SetProperty Action="ClearInstalledForUpdate" Id="Installed" Value="{}" Sequence="ui"
+                 After="MaintenanceWelcomeDlg" Condition="UPDATEMODE AND NOT ELEVATIONREQUESTED" />
+    <SetProperty Action="ClearPatchForUpdate" Id="PATCH" Value="{}" Sequence="ui"
+                 After="ClearInstalledForUpdate" Condition="UPDATEMODE AND NOT ELEVATIONREQUESTED" />
+
+    <InstallUISequence>
+      <Custom Action="RelaunchElevated" After="MigrateFeatureStates"
+              Condition="UPDATEMODE AND NOT ELEVATED AND UILevel = 5" />
+      <Show Dialog="AdminNeededDlg" After="RelaunchElevated" Condition="ELEVATIONREQUESTED" />
+      <Show Dialog="UpdateDlg" After="ClearPatchForUpdate"
+            Condition="UPDATEMODE AND NOT Installed AND NOT ELEVATIONREQUESTED" />
+
+      <!-- The two closing pages stay quiet in the window that handed over to the elevated copy. -->
+      <Show Dialog="override UserExit" OnExit="cancel" Condition="NOT ELEVATIONREQUESTED" />
+      <Show Dialog="override FatalError" OnExit="error" Condition="NOT ELEVATIONREQUESTED" />
+    </InstallUISequence>
 
     <!-- The advanced set is the one that asks whom the install is for, and brings the folder page
          with it: for everyone or for me, and where it goes. -->
@@ -311,11 +406,17 @@
 
       <!-- On an upgrade neither the scope nor the folder is a question, so "Advanced" passes both
            pages. The stock jumps out of the first page are ordered one to three. -->
+      <!-- Removing the copy the service runs goes through RemoveElevatedDlg, which asks for rights first;
+           the later of the two next-dialogs decides. -->
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="RemoveElevatedDlg"
+               Condition="SERVICEISMINE AND NOT ELEVATED" Order="10" />
+
+      <!-- Nor when another user's copy exists: this user installs into their own profile only. -->
       <Publish Dialog="AdvancedWelcomeEulaDlg" Control="Advanced" Event="NewDialog"
-               Value="ShortcutsDlg" Condition="WIX_UPGRADE_DETECTED" Order="20" />
+               Value="ShortcutsDlg" Condition="WIX_UPGRADE_DETECTED OR OTHERUSERCOPY" Order="20" />
 
       <Publish Dialog="ShortcutsDlg" Control="Back" Event="NewDialog"
-               Value="AdvancedWelcomeEulaDlg" Condition="WIX_UPGRADE_DETECTED" Order="10" />
+               Value="AdvancedWelcomeEulaDlg" Condition="WIX_UPGRADE_DETECTED OR OTHERUSERCOPY" Order="10" />
       <Publish Dialog="ShortcutsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
 
       <!-- The way back is claimed only while installing: during maintenance the last page returns
@@ -323,24 +424,24 @@
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutsDlg"
                Condition="NOT Installed" Order="10" />
 
-      <!-- Only after a fresh install: the same page ends a repair and an uninstall too. The stock
+      <!-- Only after a first install: an update has started the server already (StartServer). The stock
            event that closes the page sits at 999, so both of these run before it. -->
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="SetAppTarget"
-               Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed" Order="1" />
+               Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed AND NOT UPDATEMODE" Order="1" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication"
-               Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed" Order="2" />
+               Condition="LAUNCHAFTERINSTALL = 1 AND NOT Installed AND NOT UPDATEMODE" Order="2" />
 
       <!-- One page per ticked box, each set and then opened. They share WixShellExecTarget, so
            the order matters: the pair for a page has to run before the pair for the next one. -->
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="SetViGEmTarget"
-               Condition="INSTALLVIGEM = 1 AND NOT Installed" Order="3" />
+               Condition="INSTALLVIGEM = 1 AND NOT Installed AND NOT UPDATEMODE" Order="3" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenViGEmPage"
-               Condition="INSTALLVIGEM = 1 AND NOT Installed" Order="4" />
+               Condition="INSTALLVIGEM = 1 AND NOT Installed AND NOT UPDATEMODE" Order="4" />
 
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="SetVddTarget"
-               Condition="INSTALLVDD = 1 AND NOT Installed" Order="5" />
+               Condition="INSTALLVDD = 1 AND NOT Installed AND NOT UPDATEMODE" Order="5" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenVddPage"
-               Condition="INSTALLVDD = 1 AND NOT Installed" Order="6" />
+               Condition="INSTALLVDD = 1 AND NOT Installed AND NOT UPDATEMODE" Order="6" />
     </UI>
   </Package>
 </Wix>

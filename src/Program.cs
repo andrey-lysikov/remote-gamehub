@@ -2,7 +2,6 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Reflection;
-using System.Windows.Forms;
 using RemoteGameHub.Media;
 using RemoteGameHub.App;
 using RemoteGameHub.Library;
@@ -428,9 +427,8 @@ internal static class Program
         using var sessions = new SessionManager(config, preflight.Output!, encoder, games,
                                                 gamepads, tray, session, scales);
 
-        // What keeps an address outside this network hammering the streaming ports while they are
-        // forwarded. It refuses nobody unless [Network] Upnp is on, and what it counts is kept in
-        // the database: a worker restarted by the service must not hand anybody a clean slate.
+        // Stops outside addresses hammering forwarded ports; refuses nobody unless Upnp is on, and
+        // keeps its counts in the database so a restarted worker hands out no clean slate.
         var guard = new AccessGuard(config, new BlockStore(database));
 
         var pairing = new PairingManager(identity, clients, guard);
@@ -624,10 +622,8 @@ internal static class Program
             tray.SetState(watch.TrayState);
         };
 
-        // Sleep, shutdown and a sign-out all take this machine away without ending anything first.
-        // The stream goes down here, while there is still a network to say goodbye over; the game
-        // is left running, so a client that comes back to a woken machine resumes rather than
-        // starts again.
+        // Sleep, shutdown and sign-out end nothing first: the stream goes down here while there is a
+        // network, and the game keeps running so a client can resume after a wake.
         session.Leaving += why => sessions.MachineLeaving(why);
 
         // A warning, at every start, whatever Debug says. Not a fault — it is what this server was

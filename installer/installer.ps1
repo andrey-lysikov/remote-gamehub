@@ -17,6 +17,7 @@ $msi     = Join-Path $output 'Remote-Gamehub.msi'
 
 $packageWxs   = Join-Path $wixDir 'Package.wxs'
 $shortcutsWxs = Join-Path $wixDir 'ShortcutsDlg.wxs'
+$updateWxs    = Join-Path $wixDir 'UpdateDlg.wxs'
 
 $wixVersion = '6.0.2'
 
@@ -103,7 +104,7 @@ try {
         -d "License=$(Join-Path $wixDir 'License.rtf')" `
         -ext WixToolset.UI.wixext `
         -ext WixToolset.Util.wixext `
-        $packageWxs $shortcutsWxs `
+        $packageWxs $shortcutsWxs $updateWxs `
         -o $msi
     if ($LASTEXITCODE -ne 0) { throw 'The msi was not built.' }
 

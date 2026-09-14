@@ -1,12 +1,9 @@
 <!--
   Copyright © AndreyLysikov
   SPDX-License-Identifier: Apache-2.0
-
-  The page, as one file rather than as string literals in C#: what is drawn here is markup, and
-  markup in a compiler's string is checked by nobody. Everything the server fills in is a slot
-  spelled {{name}}; the pieces that are only sometimes there are parts of their own, marked with
-  a part comment and pasted into the slot of the same name. WebAssets.cs is the other half.
 -->
+<!-- The server fills {{name}} slots; optional pieces are "part" comments pasted into the slot
+     of the same name. WebAssets.cs is the other half. -->
 <!--part:page-->
 <!doctype html><html data-theme="{{theme}}"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -15,7 +12,7 @@
 
 <!-- The header is the icon beside two lines: the name, the version and the project's address,
      and under them what the server is doing now. The icon is as tall as both. -->
-<header><img id=mark src="/?icon=1" alt=""><div><div class=titlerow><h1>{{name}} <span class=v>v{{version}}</span></h1><span class=meta id=host>{{host}}</span><span class="meta gh"><a href="#" id=checkversion>Check version</a> <span class=dot>·</span> <a href="{{project}}" target=_blank rel=noopener>GitHub</a></span></div><p id=status>{{status}}</p></div></header>
+<header><img id=mark src="/?icon=1" alt=""><div><div class=titlerow><h1>{{name}} <span class=v>v{{version}}</span></h1><span class=meta id=host>{{host}}</span><span class="meta gh"><a href="#" id=checkversion>Has new version?</a> <span class=dot>·</span> <a href="{{project}}" target=_blank rel=noopener>GitHub</a></span></div><p id=status>{{status}}</p></div></header>
 
 <!-- Written into every page, shown or hidden: a client can start pairing a second after the page
      was drawn. Both fields are sent together on Save, and the name is what is listed. -->
@@ -46,9 +43,10 @@
 <label>Starts with<input id=command placeholder="A file, a shortcut, or steam://rungameid/…"></label>
 <label>From this folder <span class=hint>optional — many games look for their own files beside it</span><input id=folder placeholder="C:\Games\Something"></label>
 {{pointer}}
-<!-- On by default, unlike the pointer above. Named startcard: the pairing section above already
-     claims the id "card" for itself. -->
-<label class=switch><input type=checkbox id=startcard checked><span>Show splash screen when game is starting</span></label>
+<!-- Auto by default: the card goes, and the pointer shows, while a launcher waits in front. Values
+     are SplashMode's numbers. -->
+<div class=choice>Splash screen when game is starting <span class=hint>Auto hides it and shows the mouse while a launcher waits for you</span>
+<div class=segments id=splash><label><input type=radio name=splash value=1 checked><span>Auto</span></label><label><input type=radio name=splash value=2><span>Always</span></label><label><input type=radio name=splash value=0><span>Never</span></label></div></div>
 
 <!-- A fast game wants the encoder to finish early; a quiet one can afford the time. A client from
      outside this network is given one level less than this. -->

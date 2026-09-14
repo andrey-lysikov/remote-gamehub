@@ -6,9 +6,8 @@ using Xunit;
 
 namespace RemoteGameHub.Tests;
 
-// The page is three files built into the executable rather than string literals in C#. What that
-// costs is these tests: the compiler no longer notices a file left out of the build, or a slot in
-// the markup that nothing fills.
+// The page is three embedded files, so these tests catch what the compiler cannot: a file left
+// out of the build, or a slot in the markup that nothing fills.
 public class WebAssetsTests
 {
     // Every slot the whole page asks for, and the only ones WebConsole.Page() knows how to fill.
