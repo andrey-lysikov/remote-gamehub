@@ -1,7 +1,6 @@
 //  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
-using System.Drawing;
 using System.Drawing.Imaging;
 using RemoteGameHub.App;
 using RemoteGameHub.Native;

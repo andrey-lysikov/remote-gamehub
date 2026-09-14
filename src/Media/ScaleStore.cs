@@ -6,10 +6,8 @@ using RemoteGameHub.Library;
 
 namespace RemoteGameHub.Media;
 
-// Where DisplayAdaptation keeps the desktop scale a stream replaced. Unlike the mode, a scale is
-// saved by Windows itself and outlives this process: a shutdown in the middle of a stream would
-// leave the stream's scale for good. A row lives from just before the scale is changed until it is
-// put back, and one still there at a start is a restore that never happened.
+// The desktop scale a stream replaced, which Windows keeps past this process. A row lives until the
+// scale is put back; one still there at a start is a restore that never happened.
 internal sealed class ScaleStore
 {
     private readonly Database _database;
@@ -39,9 +37,8 @@ internal sealed class ScaleStore
         return scales;
     }
 
-    // Records the scale to go back to, unless one is already recorded for this screen: that one
-    // was never restored, so it is the person's own and what the screen shows now is not. Answers
-    // with whichever is kept, or the one given when nothing could be written.
+    // Records the scale to go back to unless one is already kept (never restored, so the person's).
+    // Answers with whichever is kept, or the one given when nothing could be written.
     internal int Remember(string device, int percent)
     {
         try

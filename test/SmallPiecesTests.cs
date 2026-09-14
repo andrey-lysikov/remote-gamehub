@@ -65,26 +65,6 @@ public class SmallPiecesTests
         Assert.Equal((file, arguments), SessionLauncher.SplitCommand(command));
     }
 
-    [Theory]
-    [InlineData(@"""Blizzard Uninstaller.exe"" --lang=enUS --uid=wow_enus", "wow")]
-    [InlineData(@"""Blizzard Uninstaller.exe"" --lang=enUS --uid=hs_beta", "hs_beta")]
-    [InlineData(@"""Blizzard Uninstaller.exe"" --uid=fenris --displayname=""Diablo IV""", "fenris")]
-    [InlineData(@"""Blizzard Uninstaller.exe"" --lang=enUS", null)]
-    public void A_battle_net_uid_loses_only_a_language_suffix(string command, string? uid)
-    {
-        Assert.Equal(uid, LauncherScanners.UidFrom(command));
-    }
-
-    [Fact]
-    public void A_battle_net_game_is_started_by_its_uid_not_its_page()
-    {
-        Assert.Equal(@"""C:\Battle.net\Battle.net.exe"" --exec=""launch_uid s2""",
-                     LauncherScanners.BattleNetLaunch(@"C:\Battle.net\Battle.net.exe", "s2"));
-
-        // Without the launcher, the page is what there is.
-        Assert.Equal("battlenet://s2", LauncherScanners.BattleNetLaunch(null, "s2"));
-    }
-
     [Fact]
     public void Ea_offer_identifiers_are_read_from_the_installer_manifest()
     {

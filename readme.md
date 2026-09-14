@@ -20,7 +20,7 @@ clients. Fully compatible with the stock
 - Games found automatically in the launchers — Steam, Xbox and Game Pass, Epic, GOG, EA, Battle.net — and in folders of your own
 - Cover art fetched automatically for the games found, from the store catalogue
 - Automatic discovery, so a client finds this machine without being given an address
-- Optional UPnP forwarding of the streaming ports, for playing over the internet
+- Optional UPnP forwarding of the streaming ports, for playing over the internet (and anti-ddos system for this)
 - Full 5.1 and 7.1 surround sound support
 - Virtual mouse, if you don't have a HID device connected
 - Virtual display support (you need to install the driver yourself)

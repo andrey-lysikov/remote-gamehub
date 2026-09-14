@@ -164,9 +164,8 @@ internal static class HttpResponse
         await stream.FlushAsync(cancel);
     }
 
-    // Refused, and nothing else: no body, no reason, no WWW-Authenticate naming a scheme to try.
-    // Whoever asked learns only that it was not admitted, which is all it is owed — a refusal
-    // that explains itself tells somebody working through the PIN space where they stand.
+    // Refused and nothing else: no body, reason or WWW-Authenticate, so somebody working through
+    // the PIN space learns nothing about where they stand.
     internal static Task WriteUnauthorisedAsync(Stream stream, CancellationToken cancel)
     {
         var head = Encoding.ASCII.GetBytes(

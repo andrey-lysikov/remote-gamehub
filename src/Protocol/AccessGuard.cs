@@ -10,9 +10,8 @@ namespace RemoteGameHub.Protocol;
 // row it has earned, and how much of the current one is left.
 internal readonly record struct BlockedPeer(string Address, int Attempts, int Blocks, TimeSpan Left);
 
-// Counts failed pairing attempts per address and refuses the ones that keep getting the PIN
-// wrong. Only ever for addresses off this network, and only while [Network] Upnp is on: without
-// forwarding nothing outside can reach these ports, and a house is not a thing to lock out of.
+// Counts failed pairings per address and refuses those that keep getting the PIN wrong. Only for
+// addresses off this network, and only while [Network] Upnp is on.
 internal sealed class AccessGuard
 {
     // One address's history. Failures older than the block itself are of no interest: a wrong
@@ -23,14 +22,12 @@ internal sealed class AccessGuard
         // quiet; Attempts below is the number the page shows and does not.
         internal int Failures;
 
-        // Every failed attempt this address has made while this record has lived, blocks and all.
-        // The one number that says whether it is a person mistyping or something working through
-        // the PIN space.
+        // Every failed attempt while this record has lived: what tells a person mistyping from
+        // something working through the PIN space.
         internal int Attempts;
 
-        // Blocks in a row, with nothing legitimate in between. Each one lasts this many times
-        // [Network] BlockMinutes, so something that keeps coming back is refused for longer and
-        // longer while a person who got it wrong once waits the plain fifteen minutes.
+        // Blocks in a row with nothing legitimate between; each lasts this many times BlockMinutes,
+        // so whatever keeps coming back waits longer and longer.
         internal int Blocks;
 
         internal DateTime LastFailure;
@@ -54,9 +51,8 @@ internal sealed class AccessGuard
         Restore();
     }
 
-    // What the last run was refusing. The service starts a fresh worker whenever the person
-    // signing in changes, so without this an address could spend a block a restart and never
-    // reach the second one, which is the whole of what makes coming back cost more.
+    // What the last run was refusing, so a worker restarted by the service does not reset every
+    // address to its first block.
     private void Restore()
     {
         if (_store is null) return;
@@ -100,9 +96,8 @@ internal sealed class AccessGuard
 
     private TimeSpan Block => TimeSpan.FromMinutes(_config.BlockMinutes);
 
-    // What the next block lasts for an address that has already earned this many: the configured
-    // span multiplied by the number of blocks in a row, and never more than a day, which is the
-    // most [Network] BlockMinutes may be set to in the first place.
+    // How long the next block lasts: the configured span times the blocks in a row, capped at a
+    // day, the most BlockMinutes may be set to.
     private TimeSpan BlockFor(int blocks)
     {
         var minutes = (long)_config.BlockMinutes * Math.Max(1, blocks);
@@ -180,9 +175,8 @@ internal sealed class AccessGuard
             blocked = failures >= _config.BlockAfterFailures;
             if (blocked)
             {
-                // The second block in a row lasts twice as long as the first, the third three
-                // times, and so on. Nothing resets this but a pairing that finished or the button
-                // on the page: coming back quiet for an hour is exactly what a scanner does.
+                // Each block in a row lasts one span longer. Only a finished pairing or the page's
+                // button resets it: coming back after a quiet hour is what a scanner does.
                 record.Blocks++;
                 span = BlockFor(record.Blocks);
                 record.BlockedUntil = now + span;
@@ -216,9 +210,8 @@ internal sealed class AccessGuard
             "BlockMinutes.");
     }
 
-    // A pairing that finished. The address starts again from nothing: the person got it right,
-    // and the attempts they fumbled first should not count towards a later refusal — nor should
-    // the blocks they earned lengthen the next one.
+    // A pairing that finished: the address starts from nothing, its earlier attempts and blocks
+    // no longer counted.
     internal void Succeeded(IPAddress? address)
     {
         if (!Watches(address)) return;
@@ -267,9 +260,8 @@ internal sealed class AccessGuard
         return blocked;
     }
 
-    // Lets one address back in, from the button on the page. The whole record goes, the run of
-    // blocks with it: whoever pressed it said this address is not what the count took it for, so
-    // the next block it earns is a first one again.
+    // Lets one address back in from the page's button. The whole record goes, so its next block
+    // is a first one again.
     internal bool Release(string? address)
     {
         if (!IPAddress.TryParse(address, out var parsed)) return false;
@@ -288,11 +280,8 @@ internal sealed class AccessGuard
         return true;
     }
 
-    // Addresses whose block has expired and that have been quiet since for as long as that block
-    // lasted. The quiet is measured from the end of the block, not from the last attempt: without
-    // it the record would go the moment the block did, and every block would be a first one.
-    // Answers which addresses it dropped, so that the caller can take them out of the database
-    // once it is out of the lock.
+    // Drops addresses quiet since their block ended for as long as it lasted, so no block is a
+    // first one by default. Answers them, for the caller to delete outside the lock.
     private List<string> Forget(DateTime now)
     {
         var stale = _records

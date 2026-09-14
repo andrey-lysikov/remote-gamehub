@@ -2,7 +2,6 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Diagnostics;
-using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
@@ -15,9 +14,8 @@ namespace RemoteGameHub.Session;
 // desktop. Redrawn now and then rather than once, so the spinner under the caption turns.
 internal sealed unsafe class StartingCard : IDisposable
 {
-    // How often the card is redrawn for the spinner's sake. Fast enough that the dots' sprints
-    // read as movement rather than as jumps, slow enough that redrawing the whole picture is not
-    // real work.
+    // How often the card is redrawn for the spinner: fast enough for smooth dots, slow enough that
+    // a full redraw is no real work.
     private static readonly TimeSpan RedrawEvery = TimeSpan.FromMilliseconds(40);
 
     private void* _texture;
@@ -209,9 +207,8 @@ internal sealed unsafe class StartingCard : IDisposable
         return picture;
     }
 
-    // Windows' own boot spinner, under the caption, so a game taking its time reads as loading
-    // rather than as this server having stopped: dots chasing each other round a circle, rushing
-    // and slowing, twice round and then gone before the next lap starts.
+    // Windows' boot spinner under the caption, so a slow game reads as loading rather than as the
+    // server having stopped.
     private static void DrawSpinner(Graphics canvas, int width, int top, int height,
                                     Color foreground, TimeSpan elapsed)
     {
@@ -244,9 +241,8 @@ internal sealed unsafe class StartingCard : IDisposable
     private const double SpinnerCycleMs = 5500;
     private const double SpinnerDotLagMs = 240;
 
-    // Where a dot is at a point of its lap, t from 0 to 1, or null while it is out of sight. The
-    // keyframes are the Windows progress ring's own: a quick start, a slow crawl over the top, a
-    // rush down, another crawl, and a last sprint to where it disappears.
+    // Where a dot is at t (0 to 1) of its lap, or null while out of sight. The keyframes are the
+    // Windows progress ring's own.
     private static float? SpinnerAngle(float t) => t switch
     {
         < 0.07f => Between(225, 345, t, 0, 0.07f, EaseOut),

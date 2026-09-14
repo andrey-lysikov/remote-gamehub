@@ -77,9 +77,8 @@ internal sealed class SessionManager : IDisposable
         }
     }
 
-    // Whether an ANNOUNCE from this address is one this server asked for: it launched or resumed
-    // a moment ago, or it is the client already streaming. Everything else at the RTSP port is
-    // somebody who found the port, and is counted as such.
+    // Whether an ANNOUNCE from this address was asked for: a launch or resume just now, or the
+    // client streaming. Anything else found the port and is counted.
     internal bool Expects(IPAddress? address)
     {
         if (address is null) return false;
@@ -99,9 +98,8 @@ internal sealed class SessionManager : IDisposable
         }
     }
 
-    // Drops the launch waiting to be negotiated and the address it came from, which go together:
-    // an address kept past its launch would let the next connection from it through unasked.
-    // Called under _gate.
+    // Drops the pending launch together with its address, which would otherwise let the next
+    // connection through unasked. Called under _gate.
     private void Forget()
     {
         _pending = null;
@@ -224,10 +222,10 @@ internal sealed class SessionManager : IDisposable
         try
         {
             var session = new StreamSession(_config, output, _encoder, _gamepads, _tray, _scales,
-                request, negotiation, Ended, target?.Title, poster, GameIsUp,
+                request, negotiation, Ended, target?.Title, poster, GameIsUp, WindowWaiting,
                 gamePointer: target?.Pointer ?? false,
                 gameQuality: target?.Quality ?? StreamQuality.High,
-                showCard: target?.ShowCard ?? true, preAdapted: preAdapted);
+                splash: target?.Splash ?? SplashMode.Auto, preAdapted: preAdapted);
 
             lock (_gate)
             {
@@ -367,10 +365,8 @@ internal sealed class SessionManager : IDisposable
     // machine is going away, which is no reason for someone's game to.
     internal void Shutdown() => Stop(closeTheGame: false);
 
-    // The machine itself is going: to sleep, off, or signed out. Nothing of the stream survives
-    // any of the three — the capture device, the network and this process all go — so it is ended
-    // here, in the seconds Windows gives before it stops running code, and the client is told.
-    // The game stays running and claimed: a machine that wakes finds it there, ready to resume.
+    // The machine is going to sleep, off, or signed out: the stream ends here and the client is
+    // told. The game stays running and claimed, ready to resume after a wake.
     internal void MachineLeaving(string why)
     {
         lock (_gate)
@@ -511,11 +507,13 @@ internal sealed class SessionManager : IDisposable
             return false;
         }
 
-        // From its own folder when one is known: games that look for their data beside the
-        // working directory otherwise start into an error naming this server's folder. The
-        // store's own starting folder first, where it named one.
+        // From the store's starting folder, else the install folder: games looking for data beside
+        // the working directory would otherwise fail in this server's folder.
         var workingDirectory = new[] { target.WorkingDirectory, target.InstallPath }
             .FirstOrDefault(folder => !string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder));
+
+        // Before the command runs, so a launcher it brings forward is told from what was there.
+        var foregroundAtLaunch = User32.GetForegroundWindow();
 
         try
         {
@@ -551,7 +549,8 @@ internal sealed class SessionManager : IDisposable
         lock (_gate)
         {
             _watcher?.Dispose();
-            _watcher = GameWatcher.Start(appId, target.Title, target.InstallPath, GameFinished);
+            _watcher = GameWatcher.Start(appId, target.Title, target.InstallPath, foregroundAtLaunch,
+                                         GameFinished);
         }
 
         return true;
@@ -562,6 +561,12 @@ internal sealed class SessionManager : IDisposable
     private bool GameIsUp()
     {
         lock (_gate) return _watcher?.IsOnScreen ?? true;
+    }
+
+    // Whether a launcher or another ordinary window waits in front of the game for the player.
+    private bool WindowWaiting()
+    {
+        lock (_gate) return _watcher?.WindowWaiting ?? false;
     }
 
     // The game has closed, so the stream ends rather than handing the player the host's desktop.
@@ -739,7 +744,11 @@ internal sealed class StreamSession : IDisposable
     private readonly string? _gameTitle;
     private readonly string? _posterPath;
     private readonly Func<bool> _gameIsUp;
-    private readonly bool _showCard;
+    private readonly Func<bool> _windowWaiting;
+    private readonly SplashMode _splash;
+
+    // Auto's pointer: drawn only while a window waits in front, when the game did not ask for one.
+    private bool _pointerFollowsWindow;
 
     private readonly VideoStream _video;
     private readonly AudioStream? _audio;
@@ -778,8 +787,10 @@ internal sealed class StreamSession : IDisposable
                            LaunchRequest request,
                            StreamNegotiation negotiation, Action<string> ended,
                            string? gameTitle = null, string? posterPath = null,
-                           Func<bool>? gameIsUp = null, bool gamePointer = false,
-                           StreamQuality gameQuality = StreamQuality.High, bool showCard = true,
+                           Func<bool>? gameIsUp = null, Func<bool>? windowWaiting = null,
+                           bool gamePointer = false,
+                           StreamQuality gameQuality = StreamQuality.High,
+                           SplashMode splash = SplashMode.Auto,
                            DisplayAdaptation? preAdapted = null)
     {
         _config = config;
@@ -792,7 +803,7 @@ internal sealed class StreamSession : IDisposable
         _negotiation = negotiation;
         _ended = ended;
         _gameTitle = gameTitle;
-        _showCard = showCard;
+        _splash = splash;
         // Off altogether turns off every pointer this server would draw of its own, the desktop's
         // included: a game's own switch is an override of this, not something beside it.
         _gamePointer = config.VirtualMouse && gamePointer;
@@ -809,6 +820,7 @@ internal sealed class StreamSession : IDisposable
         }
         _posterPath = posterPath;
         _gameIsUp = gameIsUp ?? (() => true);
+        _windowWaiting = windowWaiting ?? (() => false);
         AppId = request.AppId;
 
         _video = new VideoStream(config.VideoPort, config.BindAddress, negotiation);
@@ -847,9 +859,8 @@ internal sealed class StreamSession : IDisposable
         };
 
 
-        // Rumble travels back over the same channel. The bus reports a motor in one byte and the
-        // protocol carries two: 257 maps 0xFF onto 0xFFFF rather than 0xFF00. Not at all to a
-        // client that turned haptics off: it asked for its controller to stay still.
+        // Rumble goes back over the same channel, one byte widened to two (x257: 0xFF to 0xFFFF).
+        // Not to a client that turned haptics off.
         _rumble = feedback =>
         {
             if (!_input.HapticsEnabled) return;
@@ -929,9 +940,11 @@ internal sealed class StreamSession : IDisposable
 
             _input.SetScreen(display.Bounds);
 
-            // Into the desktop unless the virtual cursor is off, into a game only when it was
-            // marked as needing one: two pointers a step apart is worse than none.
-            _drawPointer = (desktop && _config.VirtualMouse) || _gamePointer;
+            // Into the desktop unless the virtual cursor is off, into a game when it was marked as
+            // needing one, or under Auto while a window waits in front: two pointers are worse than none.
+            _pointerFollowsWindow = !desktop && _config.VirtualMouse && !_gamePointer &&
+                                    _splash == SplashMode.Auto;
+            _drawPointer = (desktop && _config.VirtualMouse) || _gamePointer || _pointerFollowsWindow;
 
             if (desktop && !_config.VirtualMouse)
             {
@@ -940,16 +953,17 @@ internal sealed class StreamSession : IDisposable
             }
             else if (!desktop)
             {
-                Log.Info(_gamePointer
-                    ? "this game is marked as needing a pointer, so one is drawn into its picture"
+                Log.Info(_gamePointer ? "this game is marked as needing a pointer, so one is drawn into its picture"
+                    : _pointerFollowsWindow ? "the pointer is drawn only while a window such as a launcher waits in front"
                     : "this is a game, so the pointer is left to the game to draw");
             }
 
             duplicator = DesktopDuplicator.Create(_output, _drawPointer, preferHdr: hdr);
+            duplicator.PointerSuppressed = _pointerFollowsWindow;
 
             // A machine with no mouse of its own hides the pointer, so it is nudged once here
             // rather than left to the first move the client sends.
-            if (_drawPointer) ClientInput.ShowPointer();
+            if (_drawPointer && !_pointerFollowsWindow) ClientInput.ShowPointer();
 
             // The screen may have refused HDR, or DXGI handed back the ordinary form: the encoder
             // is told what is in the texture, not what was asked for.
@@ -1040,7 +1054,8 @@ internal sealed class StreamSession : IDisposable
 
             // Made before a single frame has been sent, so the first thing the client ever sees
             // of this machine is the card and not its desktop. It costs one drawing and one copy.
-            if (_showCard && _gameTitle is not null && !_gameIsUp())
+            if (_splash != SplashMode.Never && _gameTitle is not null && !_gameIsUp() &&
+                !(_splash == SplashMode.Auto && _windowWaiting()))
             {
                 card = StartingCard.Create(duplicator.Device, duplicator.Context,
                     duplicator.Width, duplicator.Height, duplicator.FrameFormat,
@@ -1250,13 +1265,14 @@ internal sealed class StreamSession : IDisposable
                 // send it: the ping is what reveals the port its side of the network chose.
                 if (!_video.HasPeer) continue;
 
-                // The card stands in for the desktop until the game is on screen, the player
-                // presses something, or it has stood long enough that something is wrong.
+                // The card stands in until the game is on screen, the player presses something, a
+                // window waits for them under Auto, or it has stood long enough that something is wrong.
                 if (card is not null)
                 {
                     var reason =
                         _gameIsUp() ? "the game is on screen" :
                         _cardDismissed ? "the client pressed something" :
+                        _splash == SplashMode.Auto && _windowWaiting() ? "a window such as a launcher waits for the player" :
                         clock.Elapsed - cardShownAt > CardPatience ? "the game is taking too long" :
                         null;
 
@@ -1274,6 +1290,13 @@ internal sealed class StreamSession : IDisposable
                     {
                         card.Update();
                     }
+                }
+
+                // Auto's pointer comes and goes with the window in front, nudged into view as it comes.
+                if (_pointerFollowsWindow && duplicator.PointerSuppressed == _windowWaiting())
+                {
+                    duplicator.PointerSuppressed = !duplicator.PointerSuppressed;
+                    if (!duplicator.PointerSuppressed) ClientInput.ShowPointer();
                 }
 
                 // The pointer is composited once, for the frame about to go out: drawn while

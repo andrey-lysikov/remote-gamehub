@@ -16,6 +16,15 @@ internal enum VideoCodec
     Av1,
 }
 
+// When the starting card covers a game's start, per game. Auto also draws the pointer while a
+// launcher's window waits in front. Stored as the number: 1, the column's default, is Auto.
+internal enum SplashMode
+{
+    Never = 0,
+    Auto = 1,
+    Always = 2,
+}
+
 // How much work the encoder puts into a picture, chosen per game because a shooter and a strategy
 // want opposite things. Mapped to each card's own settings where the encoder is opened.
 internal enum StreamQuality
@@ -66,11 +75,8 @@ internal sealed class AppConfig
     // Ask the router to forward the streaming ports from the internet.
     internal bool Upnp { get; set; }
 
-    // Failed pairing attempts one address outside this network is allowed before it is refused
-    // outright, and for how many minutes the first refusal lasts. Each refusal in a row multiplies
-    // that: the second lasts twice as long, the third three times, up to a day. Only ever applied
-    // while Upnp is on: without forwarding, nothing outside can reach the streaming ports at all.
-    // Zero attempts turns this off.
+    // Failed pairings an outside address may make before a refusal of BlockMinutes, longer with each
+    // refusal in a row, up to a day. Only while Upnp is on; zero attempts turns it off.
     internal int BlockAfterFailures { get; set; } = 5;
     internal int BlockMinutes { get; set; } = 15;
 

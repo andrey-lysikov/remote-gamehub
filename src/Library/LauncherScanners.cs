@@ -129,9 +129,8 @@ internal static class LauncherScanners
 
     // ------------------------------------------------------------------ EA
 
-    // EA's games are registered by their offer identifier, which is also how the client is asked
-    // to start one. Origin wrote them under "Origin Games"; the EA app does not always, and its
-    // games are found through their uninstall entries instead (see EaAppGames).
+    // EA's games by offer identifier, which also starts them: under "Origin Games" as Origin wrote
+    // them, or through uninstall entries where the EA app did not (see EaAppGames).
     internal static IReadOnlyList<ScannedGame> Ea()
     {
         var games = new List<ScannedGame>();
@@ -174,9 +173,8 @@ internal static class LauncherScanners
         return games;
     }
 
-    // The EA app's games: an uninstall entry published by Electronic Arts whose folder holds
-    // __Installer\installerdata.xml, the manifest naming the game's content identifiers. Those are
-    // the offer identifiers origin2:// takes. Games already found under "Origin Games" are skipped.
+    // The EA app's games: Electronic Arts uninstall entries whose __Installer\installerdata.xml names
+    // the offer identifiers origin2:// takes. Games found under "Origin Games" are skipped.
     private static IEnumerable<ScannedGame> EaAppGames(IReadOnlyList<ScannedGame> known)
     {
         var games = new List<ScannedGame>();
@@ -254,12 +252,9 @@ internal static class LauncherScanners
 
     // ------------------------------------------------------------------ Battle.net
 
-    // Blizzard's games are found through their uninstall entries, which name the game by its
-    // install uid (--uid=). The launcher starts a game by that same uid with --exec="launch_uid",
-    // so nothing else needs looking up. A battlenet:// address only opens the launcher on the
-    // game's page, and --exec="launch" wants a launch code (SC2) that is neither the uid (s2)
-    // nor the product code product.db keeps (s2).
-    internal static IReadOnlyList<ScannedGame> BattleNet()
+    // Games come from their uninstall entries, by install uid (--uid=). Only --exec="launch S2"
+    // starts one, by the code the caller maps the uid to; launch_uid only opens the game's page.
+    internal static IReadOnlyList<ScannedGame> BattleNet(IReadOnlyDictionary<string, string> codes)
     {
         var games = new List<ScannedGame>();
 
@@ -295,7 +290,9 @@ internal static class LauncherScanners
                 var uid = UidFrom(command);
                 if (uid is null) continue;
 
-                var launch = BattleNetLaunch(launcher, uid);
+                var launch = BattleNetLaunch(launcher, codes.GetValueOrDefault(uid), uid);
+                if (launcher is not null && !codes.ContainsKey(uid))
+                    Log.Warn($"    Battle.net: \"{title}\" ({uid}) has no row in battlenet_codes; it will only open its page");
 
                 games.Add(new ScannedGame("battlenet", uid, title, launch,
                     Directory.Exists(install ?? string.Empty) ? install : null, null));
@@ -311,13 +308,14 @@ internal static class LauncherScanners
         return games;
     }
 
-    // The command that starts the game rather than the launcher's page for it; the page's address
-    // when the launcher is not where it should be, which is at least the right game in the window.
-    internal static string BattleNetLaunch(string? launcher, string uid) =>
-        launcher is not null
-            ? $"\"{launcher}\" --exec=\"launch_uid {uid}\""
-            : $"battlenet://{uid}";
-
+    // The command that starts the game; without its code, the game's page in the launcher,
+    // and its address when the launcher itself is missing.
+    private static string BattleNetLaunch(string? launcher, string? code, string uid) =>
+        launcher is null
+            ? $"battlenet://{uid}"
+            : code is not null
+                ? $"\"{launcher}\" --exec=\"launch {code}\""
+                : $"\"{launcher}\" --exec=\"launch_uid {uid}\"";
     private static string? NormaliseFolder(string? folder)
     {
         if (string.IsNullOrWhiteSpace(folder)) return null;

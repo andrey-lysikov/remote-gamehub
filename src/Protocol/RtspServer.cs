@@ -156,9 +156,8 @@ internal sealed class RtspServer : IAsyncDisposable
             return;
         }
 
-        // Nothing negotiates here uninvited: a client reaches this port because /launch or
-        // /resume sent it, and both are refused to anybody this server has not admitted. Whoever
-        // arrives without that is somebody who found the port, and is counted for it.
+        // Nothing negotiates uninvited: only an admitted /launch or /resume sends a client here.
+        // Anybody else just found the port, and is counted for it.
         if (!_expected(peer))
         {
             Log.Warn($"{peer} asked to negotiate a stream that was never launched from it; " +

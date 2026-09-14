@@ -27,6 +27,10 @@ internal sealed class GameWatcher : IDisposable
 
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
+    // How long a window already in front at the launch must stay there to count as waiting on the
+    // player: a launcher that was open and focused does not change the foreground window.
+    private static readonly TimeSpan WindowWaitsAfter = TimeSpan.FromSeconds(8);
+
     // The shell's own windows, which formally cover the screen and are not games. Copied from
     // System-Spinner, where the list was arrived at by finding out.
     private static readonly string[] ShellClasses =
@@ -39,6 +43,7 @@ internal sealed class GameWatcher : IDisposable
     private readonly string _title;
     private readonly string? _installPath;
     private readonly Action<int>? _finished;
+    private readonly nint _foregroundAtLaunch;
     private readonly CancellationTokenSource _stopping = new();
     private readonly Thread _thread;
 
@@ -57,22 +62,28 @@ internal sealed class GameWatcher : IDisposable
     // the starting card alone: a process can be up a minute before anything is drawn.
     internal bool IsOnScreen { get; private set; }
 
-    private GameWatcher(int appId, string title, string? installPath, Action<int>? finished)
+    // true while an ordinary window, not a full-screen game, waits in front for the player: a
+    // launcher, a sign-in, a windowed game. Read for SplashMode.Auto.
+    internal bool WindowWaiting { get; private set; }
+
+    private GameWatcher(int appId, string title, string? installPath, nint foregroundAtLaunch,
+                        Action<int>? finished)
     {
         _appId = appId;
         _title = title;
         _installPath = installPath;
+        _foregroundAtLaunch = foregroundAtLaunch;
         _finished = finished;
 
         _thread = new Thread(Watch) { IsBackground = true, Name = "game-watch" };
     }
 
-    // Begins watching. Returns at once: the answer arrives in the log and through finished,
-    // because /launch has to be replied to long before a game of any size has loaded.
+    // Begins watching. Returns at once: the answer arrives in the log and through finished.
+    // foregroundAtLaunch is the window that was in front before the command ran.
     internal static GameWatcher Start(int appId, string title, string? installPath,
-                                      Action<int>? finished = null)
+                                      nint foregroundAtLaunch, Action<int>? finished = null)
     {
-        var watcher = new GameWatcher(appId, title, installPath, finished);
+        var watcher = new GameWatcher(appId, title, installPath, foregroundAtLaunch, finished);
         watcher._thread.Start();
         return watcher;
     }
@@ -91,6 +102,15 @@ internal sealed class GameWatcher : IDisposable
                 var alive = Look(out var onScreen);
 
                 if (onScreen) IsOnScreen = true;
+
+                var windowWaiting = OrdinaryWindowWaiting(waiting.Elapsed);
+                if (windowWaiting != WindowWaiting)
+                {
+                    WindowWaiting = windowWaiting;
+                    Log.Info(windowWaiting
+                        ? $"a window is waiting in front of \"{_title}\" for the player"
+                        : $"no window is waiting in front of \"{_title}\" any more");
+                }
 
                 if (alive)
                 {
@@ -117,6 +137,7 @@ internal sealed class GameWatcher : IDisposable
                     {
                         IsRunning = false;
                         IsOnScreen = false;
+                        WindowWaiting = false;
                         Log.Event($"\"{_title}\" has finished");
                         _finished?.Invoke(_appId);
                         return;
@@ -198,6 +219,27 @@ internal sealed class GameWatcher : IDisposable
         return true;
     }
 
+    // Whether the foreground is an ordinary window waiting on the player: not the shell's, not
+    // minimised, and not a game covering the screen (maximised windows do not count as covering).
+    private bool OrdinaryWindowWaiting(TimeSpan sinceLaunch)
+    {
+        var window = User32.GetForegroundWindow();
+        if (window == 0 || IsShellWindow(window) || User32.IsIconic(window)) return false;
+        if (!User32.IsZoomed(window) && TryFullscreenWindow(out _)) return false;
+
+        // One brought forward by the launch counts at once; one already there only after a while.
+        return window != _foregroundAtLaunch || HasStarted || sinceLaunch >= WindowWaitsAfter;
+    }
+
+    private static bool IsShellWindow(nint window)
+    {
+        var className = new StringBuilder(64);
+        if (User32.GetClassName(window, className, className.Capacity) <= 0) return false;
+
+        var name = className.ToString();
+        return ShellClasses.Any(shell => string.Equals(name, shell, StringComparison.Ordinal));
+    }
+
     // Whether the foreground window covers its whole monitor and is not one of the shell's.
     // This is System-Spinner's TryFullscreenArea, reduced to the question asked here.
     private static bool TryFullscreenWindow(out uint processId)
@@ -205,17 +247,7 @@ internal sealed class GameWatcher : IDisposable
         processId = 0;
 
         var window = User32.GetForegroundWindow();
-        if (window == 0) return false;
-
-        var className = new StringBuilder(64);
-        if (User32.GetClassName(window, className, className.Capacity) > 0)
-        {
-            var name = className.ToString();
-            foreach (var shell in ShellClasses)
-            {
-                if (string.Equals(name, shell, StringComparison.Ordinal)) return false;
-            }
-        }
+        if (window == 0 || IsShellWindow(window)) return false;
 
         if (!User32.GetWindowRect(window, out var bounds)) return false;
 

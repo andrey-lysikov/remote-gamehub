@@ -176,9 +176,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
                          (known is null ? string.Empty : $"  [{known.Name}]"));
 
 
-                // Everything but finding this machine and pairing with it is for a client this
-                // server has admitted. The certificate is the whole of the proof, and one that
-                // does not match a remembered client is no proof at all.
+                // All but discovery and pairing is for admitted clients, and the certificate is the
+                // whole proof: one matching no remembered client proves nothing.
                 if (NeedsAPairedClient(request.Path) && known is null)
                 {
                     Log.Warn($"{peer} asked for {request.Path} without being paired; it is refused");
@@ -189,11 +188,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
                     return;
                 }
 
-                // Pairing is done at the machine: somebody reads four digits off the client's
-                // screen and types them into the page here. An address off this network cannot be
-                // at the machine, so it is never let into the exchange at all, forwarded ports or
-                // not. What UPnP opens is streaming to a client that paired at home; a new
-                // pairing is not something the internet is invited to start.
+                // Pairing is done at the machine, so an address off this network is never let in,
+                // forwarded ports or not: UPnP opens streaming, not new pairings.
                 if (request.Path == "/pair" && !PairsHere(address))
                 {
                     Log.Warn($"{peer} asked to pair from outside this network; it is refused. " +
@@ -342,9 +338,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
         }
     }
 
-    // The paths a client may ask for before this server has admitted it: the two it needs to be
-    // found and to pair. Everything else — the list, the covers, a launch, a resume, a cancel —
-    // is a paired client's, and over TLS, which is where the certificate comes from.
+    // The only paths open before admission: being found and pairing. Everything else is for a
+    // paired client over TLS, where the certificate comes from.
     private static bool NeedsAPairedClient(string path) =>
         path is not ("/serverinfo" or "/pair");
 

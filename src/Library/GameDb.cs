@@ -1,7 +1,6 @@
 //  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
-using System.Net.Http;
 using System.Text.Json;
 using RemoteGameHub.App;
 

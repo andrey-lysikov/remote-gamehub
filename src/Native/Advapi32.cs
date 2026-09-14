@@ -288,7 +288,6 @@ internal static class Advapi32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ChangeServiceConfig2(nint service, uint infoLevel,
                                                      ref ServiceDescription info);
-
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool DeleteService(nint service);

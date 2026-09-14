@@ -3,7 +3,6 @@
 
 using System.Globalization;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using RemoteGameHub.App;
@@ -335,7 +334,9 @@ internal sealed class WebConsole : IAsyncDisposable
             // added: the pointer switch belongs to that row and is written straight after.
             var saved = _games.Save(toSave, title, command, folder);
             _games.RecordPointer(saved, request.Query("pointer") == "1");
-            _games.RecordShowCard(saved, request.Query("card") != "0");
+
+            if (int.TryParse(request.Query("card"), out var splash) && Enum.IsDefined(typeof(SplashMode), splash))
+                _games.RecordSplash(saved, (SplashMode)splash);
 
             if (int.TryParse(request.Query("quality"), out var level) &&
                 Enum.IsDefined(typeof(StreamQuality), level))
@@ -352,7 +353,7 @@ internal sealed class WebConsole : IAsyncDisposable
         if (request.Query("artlist") is not null)
         {
             var title = (request.Query("title") ?? string.Empty).Trim();
-            var found = await CoverArt.SearchAllAsync(title, _config, _stopping.Token);
+            var found = await CoverArt.SearchAllAsync(title, _stopping.Token);
 
             var json = "[" + string.Join(",", found.Select(c =>
                 $"{{\"name\":{JsonText(c.Name)},\"src\":{JsonText(c.Address)}}}")) + "]";
@@ -455,7 +456,7 @@ internal sealed class WebConsole : IAsyncDisposable
                         $"data-folder=\"{Escape(game.InstallPath ?? string.Empty)}\" " +
                         $"data-pointer={(game.Pointer ? 1 : 0)} " +
                         $"data-quality={(int)game.Quality} " +
-                        $"data-card={(game.ShowCard ? 1 : 0)}>");
+                        $"data-card={(int)game.Splash}>");
 
             // A container of its own, so the overlays below position against the poster alone,
             // not against the whole tile — taller by the title and source line under it.
@@ -478,7 +479,7 @@ internal sealed class WebConsole : IAsyncDisposable
             // Reset only where there is something to reset: a store's game changed in any way on
             // this page. A game added by hand has no found state to go back to.
             var changedHere = game.Manual || game.ArtManual || game.Pointer ||
-                              game.Quality != StreamQuality.High || !game.ShowCard;
+                              game.Quality != StreamQuality.High || game.Splash != SplashMode.Auto;
             var reset = game.Source != "by hand" && changedHere
                 ? $"<button data-do=reset title=\"Reset to what was found\">{ResetIcon}</button>"
                 : string.Empty;
@@ -582,9 +583,8 @@ internal sealed class WebConsole : IAsyncDisposable
     {
         var waiting = _pairing.WaitingFor;
 
-        // One pass over Web/page.html, which is where everything about how this looks now lives.
-        // The lists are drawn here rather than in the browser so that the first paint is the whole
-        // page: somebody opening this to read the log should not watch it assemble itself.
+        // One pass over Web/page.html. Lists are drawn here rather than in the browser, so the first
+        // paint is the whole page.
         return WebAssets.Fill(WebAssets.Part("page"),
             ("theme", ThemeName()),
             ("name", AppParameters.Identity.DisplayName),
@@ -845,9 +845,8 @@ internal sealed class WebConsole : IAsyncDisposable
     private const string PlusIcon =
         "<svg viewBox=\"0 0 24 24\" class=big aria-hidden=true><path d=\"M12 5v14M5 12h14\"/></svg>";
 
-    // The stylesheet and the script live in Web/page.css and Web/page.js, built into this
-    // executable and read through WebAssets. They are markup, not C#, and an editor that
-    // knows that is worth more than a string literal the compiler only counts quotes in.
+    // The stylesheet and script live in Web/page.css and Web/page.js, embedded and read through
+    // WebAssets.
 
     public async ValueTask DisposeAsync()
     {

@@ -160,8 +160,8 @@ internal sealed class Database : IDisposable
 
         if (version < 9)
         {
-            // Whether the starting card is shown for this game while it loads. On by default,
-            // unlike the pointer above: it is the odd game that is confused by it, not the rule.
+            // The starting card for this game, now as SplashMode's number: 1, the default and the
+            // old "on", is Auto; 0 is Never; 2 is Always.
             Execute(_connection, "ALTER TABLE games ADD COLUMN starting_card INTEGER NOT NULL DEFAULT 1;");
 
             Execute(_connection, "PRAGMA user_version = 9;");
@@ -170,9 +170,8 @@ internal sealed class Database : IDisposable
 
         if (version < 10)
         {
-            // The addresses being refused, so that a restart does not hand a run of failures back
-            // its clean slate. One row per address, written when the count changes and deleted
-            // when the address is let in again or has been quiet long enough to be forgotten.
+            // Refused addresses, one row each, so a restart does not wipe a run of failures.
+            // Deleted when the address is let in again or has been quiet long enough.
             Execute(_connection,
                 """
                 CREATE TABLE blocks (
@@ -206,13 +205,38 @@ internal sealed class Database : IDisposable
 
         if (version < 12)
         {
-            // The folder a game is started from, when its store names one apart from where it is
-            // installed: GOG's DOSBox games start in their DOSBOX folder, and their arguments
-            // name the configuration files from there. Null means the install folder.
+            // The folder a game starts in when its store names one apart from the install folder
+            // (GOG's DOSBox games start in DOSBOX). Null means the install folder.
             Execute(_connection, "ALTER TABLE games ADD COLUMN working_dir TEXT;");
 
             Execute(_connection, "PRAGMA user_version = 12;");
             version = 12;
+        }
+
+        if (version < 13)
+        {
+            // Battle.net starts a game only by its product code, case and all ("launch S2"); no file
+            // of its own maps the install uid to it, so the list lives here, open to additions.
+            Execute(_connection,
+                """
+                CREATE TABLE battlenet_codes (
+                    uid  TEXT PRIMARY KEY COLLATE NOCASE,  -- install uid, without a language suffix
+                    code TEXT NOT NULL                     -- what --exec="launch" is given
+                );
+
+                INSERT INTO battlenet_codes (uid, code) VALUES
+                    ('s1', 'S1'), ('s2', 'S2'), ('w3', 'W3'), ('w1r', 'W1R'), ('w2r', 'W2R'),
+                    ('wow', 'WoW'), ('wow_classic', 'WoWC'), ('diablo3', 'D3'), ('osi', 'OSI'),
+                    ('fenris', 'Fen'), ('anbs', 'ANBS'), ('hs_beta', 'WTCG'), ('heroes', 'Hero'),
+                    ('prometheus', 'Pro'), ('rtro', 'RTRO'), ('wlby', 'WLBY'), ('gryphon', 'GRY'),
+                    ('viper', 'VIPR'), ('odin', 'ODIN'), ('lazarus', 'LAZR'), ('zeus', 'ZEUS'),
+                    ('fore', 'FORE'), ('auks', 'AUKS'), ('spot', 'SPOT'), ('aqua', 'AQUA'),
+                    ('aris', 'ARIS'), ('ark', 'ARK'), ('lbra', 'LBRA'), ('lyra', 'LYRA'),
+                    ('scor', 'SCOR'), ('gdt', 'GDT');
+                """);
+
+            Execute(_connection, "PRAGMA user_version = 13;");
+            version = 13;
         }
 
         Log.Info(from == version

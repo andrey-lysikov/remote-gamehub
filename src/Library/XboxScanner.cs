@@ -201,9 +201,8 @@ internal static class XboxScanner
         @"SOFTWARE\Microsoft\GamingServices\PackageRepository\Package",
     };
 
-    // The family name is the identity name plus a publisher hash, absent from the config. It comes
-    // from a key named after the package, Name_Version_Architecture_ResourceId_PublisherHash: the
-    // person's AppModel repository first, then the machine's own lists.
+    // The family name (identity plus publisher hash) from a key named Name_Version_Arch_Res_Hash:
+    // the person's AppModel repository first, then the machine's own lists.
     private static string? ResolveFamilyName(string identityName)
     {
         using (var packages = OpenPackagesQuietly())
@@ -252,10 +251,8 @@ internal static class XboxScanner
         return null;
     }
 
-    // The family name as Windows derives it, when no list of packages names this one: the identity
-    // name, an underscore, and the publisher's hash — the first 8 bytes of the SHA-256 of the
-    // publisher string in UTF-16LE, as 13 characters of Crockford's base32. The same 8wekyb3d8bbwe
-    // every Microsoft package ends in, computed rather than looked up.
+    // The family name as Windows derives it: identity, "_", and the first 8 bytes of SHA-256 of the
+    // UTF-16LE publisher as 13 Crockford base32 characters (Microsoft's 8wekyb3d8bbwe).
     internal static string? FamilyNameFromPublisher(string identityName, string? publisher)
     {
         if (string.IsNullOrWhiteSpace(publisher)) return null;

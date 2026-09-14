@@ -7,10 +7,8 @@ using RemoteGameHub.App;
 
 namespace RemoteGameHub.Protocol;
 
-// The page's markup, styles and script, read out of the executable they are built into. They were
-// string literals in WebConsole until they outgrew it: nothing checked their syntax, a mistake in
-// the script showed up as silence in a browser rather than at build time, and three quarters of
-// that file was markup. They are still shipped inside the one exe, as embedded resources.
+// The page's markup, styles and script, read from resources embedded in the one exe. Real files
+// rather than string literals, so editors check their syntax.
 internal static partial class WebAssets
 {
     // Web/page.html is one document with the whole page in it, followed by the pieces that are
@@ -55,9 +53,8 @@ internal static partial class WebAssets
             return string.Empty;
         });
 
-    // The names a piece of the page asks to have filled. Only the tests call this: what it
-    // answers is the contract between Web/page.html and the code that fills it, and a slot added
-    // to the file and to nothing else should fail a build rather than leave a hole in the page.
+    // The slots a piece of the page asks to have filled. Only tests call this, so a slot nothing
+    // fills fails the build rather than leaving a hole.
     internal static IReadOnlyList<string> SlotsIn(string template) =>
         Slot.Matches(template).Select(match => match.Groups[1].Value).Distinct().ToArray();
 
@@ -78,9 +75,8 @@ internal static partial class WebAssets
         return parts;
     }
 
-    // The files are embedded under one name each, set in the csproj. A missing one is a build that
-    // went wrong rather than anything a person did, and is said plainly rather than thrown: the
-    // rest of the server — the streaming, which is the point of it — is unaffected.
+    // Embedded under names set in the csproj. A missing one is a broken build, logged rather than
+    // thrown so streaming is unaffected.
     private static string Read(string name)
     {
         var resource = "RemoteGameHub.Web." + name;

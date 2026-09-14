@@ -7,15 +7,13 @@ using RemoteGameHub.Library;
 
 namespace RemoteGameHub.Protocol;
 
-// One refused address as the database keeps it. The guard works from its own table in memory and
-// writes through to this: a restart is common — the service moves its worker whenever the person
-// signing in changes — and a run of failures that starts again at every restart counts nothing.
+// One refused address as the database keeps it. The guard works in memory and writes through, as
+// the service restarts its worker often and a count reset at each restart counts nothing.
 internal sealed record StoredBlock(string Address, int Attempts, int Blocks,
                                    DateTime LastFailure, DateTime BlockedUntil);
 
-// Where AccessGuard keeps what it knows between runs. Small and written rarely: a row appears the
-// first time an address off this network fails, and goes when it pairs, is let in from the page,
-// or has been quiet long enough for the guard to forget it.
+// Where AccessGuard keeps what it knows between runs: a row from an outside address's first
+// failure until it pairs, is let in from the page, or is forgotten.
 internal sealed class BlockStore
 {
     private readonly Database _database;

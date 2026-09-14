@@ -47,12 +47,10 @@ internal sealed class PortForwarding : IAsyncDisposable
     private string? _controlUrl;
     private string? _serviceType;
     private string? _localAddress;
-    private Task? _renewing;
     private bool _announced;
 
-    // Searches that found nothing, in a row. The first one or two are ordinary — at startup the
-    // network card is often still negotiating, and a search from an address nothing answers on
-    // finds nothing — so the complaint waits until it is clear the router is not going to answer.
+    // Empty searches in a row. The first few are ordinary while the network comes up, so the
+    // complaint waits until the router plainly will not answer.
     private int _searchesThatFoundNothing;
 
     internal PortForwarding(AppConfig config) => _config = config;
@@ -71,7 +69,7 @@ internal sealed class PortForwarding : IAsyncDisposable
     {
         if (!_config.Upnp) return;
 
-        _renewing = Task.Run(RunAsync);
+        _ = Task.Run(RunAsync);
     }
 
     private async Task RunAsync()
@@ -84,9 +82,8 @@ internal sealed class PortForwarding : IAsyncDisposable
                 {
                     var addresses = LocalAddresses();
 
-                    // Nothing to search from: every address this machine has is one Windows made
-                    // up while it waited for a lease. Not the router's fault and not worth a
-                    // warning — it is the network coming up, and it comes up in seconds.
+                    // Nothing to search from: every address is one Windows made up awaiting a lease.
+                    // The network coming up, not worth a warning.
                     if (addresses.Count == 0)
                     {
                         Log.Info("no address of this machine can reach a router yet (the network " +
@@ -110,10 +107,8 @@ internal sealed class PortForwarding : IAsyncDisposable
                             string.Join(", ", Wanted.Select(w => $"{w.Port}/{w.Protocol}")) +
                             $"\nTried again every {SearchRetryEvery.TotalMinutes:0} minute(s).";
 
-                        // A search that finds nothing is ordinary the first few times: a router
-                        // busy answering a dozen other things drops the odd multicast, and one at
-                        // startup often goes out before this machine's address is good for
-                        // anything. Said out loud once it has plainly had its chances, and once.
+                        // Empty searches are ordinary at first (dropped multicast, address not ready);
+                        // said once, when the router has plainly had its chances.
                         if (_searchesThatFoundNothing == ComplainAfterSearches) Log.Warn(message);
                         else Log.Info(message);
 
@@ -270,9 +265,8 @@ internal sealed class PortForwarding : IAsyncDisposable
                     if (entry.Address.AddressFamily != AddressFamily.InterNetwork) continue;
                     if (IPAddress.IsLoopback(entry.Address)) continue;
 
-                    // 169.254.x is what Windows gives an interface that asked for an address and
-                    // got no answer. Nothing is on the other side of it, least of all a router,
-                    // and a search from it is where "no router answered" came from at startup.
+                    // 169.254.x is what Windows gives an interface that got no lease: no router is
+                    // behind it, and searching from it was the startup "no router answered".
                     var octets = entry.Address.GetAddressBytes();
                     if (octets[0] == 169 && octets[1] == 254)
                     {

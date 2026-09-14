@@ -171,7 +171,6 @@ internal static unsafe class Dxgi
     internal const int E_ACCESSDENIED = unchecked((int)0x80070005);
 
     internal const uint DXGI_FORMAT_B8G8R8A8_UNORM = 87;
-    internal const uint DXGI_FORMAT_R10G10B10A2_UNORM = 24;
 
     // What an HDR desktop is composed in: linear scRGB, where 1.0 is the eighty nits of white a
     // standard-range desktop is drawn at, and values above it are the highlights.

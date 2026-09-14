@@ -19,9 +19,8 @@ internal sealed class SessionWatch : IDisposable
     // Raised when streaming becomes possible or stops being possible.
     internal event Action<SessionWatch>? Changed;
 
-    // Raised with the reason when the machine itself is going: to sleep, off, or signed out.
-    // Nothing outlives any of the three, and the seconds before they happen are all there is in
-    // which to end a stream properly.
+    // Raised with the reason when the machine is going to sleep, off, or signed out: the last
+    // seconds in which a stream can be ended properly.
     internal event Action<string>? Leaving;
 
     internal SessionWatch()
@@ -129,9 +128,8 @@ internal sealed class SessionWatch : IDisposable
 
     private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
     {
-        // Written whether or not it changed anything. A lock, an unlock and a sign-out all arrive
-        // here, and which of them was the last thing to happen is the question a worker that
-        // vanished a second later raises. The ones that change the picture say more, below.
+        // Logged whether or not it changed anything: the last of these is what explains a worker
+        // that vanished a second later. The ones that change the picture say more, below.
         if (!Settle($"the session changed ({e.Reason})"))
             Log.Info($"the session changed ({e.Reason}); there is still " +
                      (IsRemote ? "no screen here to capture" : "a screen here to capture"));
@@ -152,9 +150,8 @@ internal sealed class SessionWatch : IDisposable
                 break;
 
             case PowerModes.Resume:
-                // The screen, the encoder and the sound all come back on their own, and a client
-                // may reconnect at once. Whether there is a console to capture is asked again,
-                // because a machine can be woken by a remote desktop connection.
+                // Screen, encoder and sound come back on their own. The console is asked again,
+                // since a remote desktop connection can be what woke the machine.
                 if (!Settle("this machine woke up"))
                     Log.Event("this machine woke up; " + Describe());
 
@@ -171,9 +168,8 @@ internal sealed class SessionWatch : IDisposable
             : "this session is being signed out");
     }
 
-    // Asks Windows again and says so when the answer turned over. Every session switch can change
-    // it, and asking is cheaper than working out from the reason which of them did. Answers
-    // whether it did.
+    // Asks Windows again after any session switch, cheaper than reasoning from the cause, and
+    // answers whether the answer turned over.
     private bool Settle(string what)
     {
         var suspended = PlatformGuard.IsRemoteSession;

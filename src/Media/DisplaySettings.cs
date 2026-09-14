@@ -45,9 +45,8 @@ internal sealed class DisplayAdaptation : IDisposable
         _scales = scales;
     }
 
-    // Adapts the screen as far as it can and returns what puts it back. Never throws: a screen
-    // that would not change is a stream at the wrong size, which is worth a warning and no more.
-    // scales is where the replaced desktop scale is kept until it is put back.
+    // Adapts the screen as far as it can and returns what puts it back, keeping the replaced scale
+    // in scales. Never throws: a screen that would not change is only worth a warning.
     internal static DisplayAdaptation Apply(DisplayOutput output, int width, int height, int fps,
                                             bool wantHdr, bool canEncodeHdr, bool enabled,
                                             bool scaleForClient, ScaleStore scales,

@@ -62,10 +62,6 @@ internal static unsafe class NvEnc
     // order of DXGI_FORMAT_B8G8R8A8_UNORM, the format the capturer produces.
     internal const int BufferFormatArgb = 0x01000000;
 
-    // NV_ENC_BUFFER_FORMAT_ABGR10: R in the lowest 10 bits, the bit order of
-    // DXGI_FORMAT_R10G10B10A2_UNORM. Its sibling ARGB10 (0x02000000) puts B lowest and swaps red.
-    internal const int BufferFormatAbgr10 = 0x20000000;
-
     // NV_ENC_BUFFER_FORMAT_YUV420_10BIT: luma then interleaved chroma, two bytes a sample with the
     // ten bits at the top — DXGI_FORMAT_P010, which is what the colour shader writes.
     internal const int BufferFormatYuv420Ten = 0x00010000;

@@ -90,12 +90,8 @@ internal static class SessionLauncher
         }
     }
 
-    // Starts something as the person signed in, through the shell so a URL, a .conf or a shell:
-    // path resolves as a double-click would. Only reached when the server itself runs as SYSTEM.
-    // A launch command as what to start and what to hand it: "C:\...\Battle.net.exe"
-    // --exec="launch Pro" splits after the closing quote. Unquoted, a path with spaces cannot be
-    // told from a path with arguments, except at ".exe " — which is where GOG's DOSBox games
-    // put theirs. Anything else is a single path or address.
+    // A launch command as file and arguments: split after a closing quote, or at ".exe " when
+    // unquoted (GOG's DOSBox games). Anything else is a single path or address.
     internal static (string File, string Arguments) SplitCommand(string command)
     {
         var text = command.Trim();
@@ -115,6 +111,8 @@ internal static class SessionLauncher
         return (text, string.Empty);
     }
 
+    // Starts something as the person signed in, through the shell so URLs and shell: paths resolve.
+    // Only reached when the server itself runs as SYSTEM.
     internal static bool StartAsConsoleUser(string command, string? workingDirectory)
     {
         EnablePrivileges();

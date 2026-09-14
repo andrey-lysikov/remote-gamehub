@@ -114,6 +114,9 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 
     // The texture the encoder reads: the raw capture for an HDR desktop (the shader composites
     // the pointer from CursorOverlay instead), or the copy with the pointer drawn in otherwise.
+    // Whether a pointer this duplicator could draw is left out of the frames for the moment.
+    internal bool PointerSuppressed { get; set; }
+
     internal nint FrameTexture => !IsHdrDesktop && _pointerDrawn ? (nint)_composed : (nint)_frame;
 
     // The pointer, on its own, for the colour shader to blend onto the picture it converts. Zero
@@ -383,6 +386,13 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
         _pointerDrawn = false;
 
         if (!_drawPointer || _frame is null) return false;
+
+        // Held back for now, as SplashMode.Auto does until a window waits in front.
+        if (PointerSuppressed)
+        {
+            if (IsHdrDesktop && wasDrawn) ClearCursorOverlay();
+            return wasDrawn;
+        }
 
         // Asked before the copy, not after: inside a game there is no pointer at all, and copying
         // a whole frame to change nothing is half a gigabyte a second at 1080p60.

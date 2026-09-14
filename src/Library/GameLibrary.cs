@@ -25,7 +25,7 @@ internal sealed record ArtworkCandidate(long Id, string Source, string? External
 
 // Everything needed to start one game and to recognise it afterwards.
 internal sealed record LaunchTarget(string Command, string? InstallPath, string Title,
-                                    bool Pointer, StreamQuality Quality, bool ShowCard,
+                                    bool Pointer, StreamQuality Quality, SplashMode Splash,
                                     string? WorkingDirectory = null);
 
 // The games this machine has, as of the last scan: once at every start, after preflight, and again
@@ -53,7 +53,7 @@ internal sealed class GameLibrary
             ("Epic", config.Epic, LauncherScanners.Epic),
             ("GOG", config.Gog, LauncherScanners.Gog),
             ("EA", config.Ea, LauncherScanners.Ea),
-            ("Battle.net", config.BattleNet, LauncherScanners.BattleNet),
+            ("Battle.net", config.BattleNet, () => LauncherScanners.BattleNet(BattleNetCodes())),
             ("folders", config.GamesFolders.Count > 0,
                 () => FolderScanner.Scan(config.GamesFolders, config.GamesDepth)),
         };
@@ -80,10 +80,8 @@ internal sealed class GameLibrary
         // without this they carry no current stamp and the sweep would decide they had gone.
         var manualSeen = new HashSet<long>();
 
-        // Where the stores installed their games, with the store that did. A title is not enough
-        // to tell a folder's find from a store's: the folder is named "Counter-Strike Global
-        // Offensive" and the game "Counter-Strike 2", and the executable found in it starts the
-        // game without its store — or starts the store's launcher instead of the game.
+        // Where the stores installed their games, and which store: titles differ between folder and
+        // store, and an executable found there starts the game without its store, or its launcher.
         var storeFolders = new List<(string Folder, string Store)>();
 
         foreach (var (name, enabled, scan) in sources)
@@ -225,9 +223,8 @@ internal sealed class GameLibrary
             Log.Info($"    [{game.Source}] {game.Title}\n        {game.LaunchCommand}");
     }
 
-    // The store whose game folder holds what a folder scan would start, or null. The file is what
-    // is compared, not the folder the scan named it after: a scanned "D:\Games\Blizzard" that
-    // picked Diablo IV's executable is Diablo IV's folder all the same.
+    // The store whose game folder holds the file a folder scan would start, or null. The file is
+    // compared, not the folder the scan named the game after.
     internal static string? InStoreFolder(ScannedGame game, IReadOnlyList<(string Folder, string Store)> storeFolders)
     {
         if (FolderKey(SessionLauncher.SplitCommand(game.LaunchCommand).File) is not { } file) return null;
@@ -269,10 +266,8 @@ internal sealed class GameLibrary
 
     private void Upsert(ScannedGame game, string stamp)
     {
-        // A row is keyed by its command, so a scanner that learns a better one for the same game
-        // (Battle.net's launcher address giving way to the command that starts the game) would
-        // otherwise leave the old row to be swept as gone, and its edits and cover with it. The
-        // store's own identifier says it is the same game: the row takes the new command.
+        // Rows are keyed by command, so a new command for the same store identifier moves the row
+        // rather than sweeping it as gone with its edits and cover.
         if (game.ExternalId is not null)
         {
             using var rebind = _database.Command(
@@ -297,9 +292,8 @@ internal sealed class GameLibrary
             VALUES ($source, $external, $title, $launch, $install, $working, $art, $stamp, $stamp)
             ON CONFLICT (source, launch_command) DO UPDATE SET
                 external_id  = excluded.external_id,
-                -- What somebody typed outlives what a scanner reads. An edit is a statement that
-                -- the scanner got the name or the folder wrong, and a scan that overwrote it would
-                -- undo that at every start without saying so.
+                -- What somebody typed outlives what a scanner reads: an edit says the scanner got
+                -- the name or folder wrong, and a scan must not silently undo it.
                 title        = CASE WHEN games.manual = 1 THEN games.title ELSE excluded.title END,
                 install_path = CASE WHEN games.manual = 1
                                     THEN games.install_path ELSE excluded.install_path END,
@@ -308,9 +302,8 @@ internal sealed class GameLibrary
                 -- The game is here again. Whatever was edited about it before it went is exactly
                 -- what this row still holds, which is the reason it was kept rather than deleted.
                 removed_at   = NULL,
-                -- The scan only ever finds art the store keeps locally, and finds none for most
-                -- games. A picture fetched from the online catalogue must survive the next scan,
-                -- so a scanner with nothing to say leaves what is already there alone.
+                -- Scans rarely find local art; a cover fetched online must survive them, so a
+                -- scanner with nothing to say leaves what is there.
                 box_art_path = COALESCE(excluded.box_art_path, games.box_art_path),
                 last_seen_at = excluded.last_seen_at;
             """);
@@ -412,6 +405,22 @@ internal sealed class GameLibrary
     }
 
     // One game a person entered or edited, as the scan needs to see it.
+    // Battle.net's launch codes by install uid, as the battlenet_codes table lists them.
+    private Dictionary<string, string> BattleNetCodes()
+    {
+        var codes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        lock (_database.Gate)
+        {
+            using var command = _database.Command("SELECT uid, code FROM battlenet_codes;");
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) codes[reader.GetString(0)] = reader.GetString(1);
+        }
+
+        return codes;
+    }
+
     private sealed record ManualRow(long Id, string Title, string LaunchCommand, string? InstallPath);
 
     // The games a person put there, which the scan must not overwrite. Rows already marked gone are
@@ -470,7 +479,7 @@ internal sealed class GameLibrary
     // when there is none: the page hangs it on the cover's address so a new one is fetched.
     internal sealed record GameDetail(long Id, string Source, string Title, string LaunchCommand,
                                       string? InstallPath, long ArtStamp, bool Manual, bool ArtManual,
-                                      bool Pointer, StreamQuality Quality, bool ShowCard);
+                                      bool Pointer, StreamQuality Quality, SplashMode Splash);
 
     internal IReadOnlyList<GameDetail> Details()
     {
@@ -497,7 +506,7 @@ internal sealed class GameLibrary
                     reader.GetInt64(7) != 0,
                     reader.GetInt64(8) != 0,
                     Quality(reader.GetInt64(9)),
-                    reader.GetInt64(10) != 0));
+                    Splash(reader.GetInt64(10))));
             }
         }
 
@@ -525,9 +534,8 @@ internal sealed class GameLibrary
         {
             if (id > 0)
             {
-                // The switches below the name are recorded on their own and are not an edit of
-                // what the scan found: a game whose name, command and folder are as they were is
-                // left the scanner's, or changing its quality would freeze it at this scan.
+                // The switches are not an edit of what the scan found: with name, command and folder
+                // unchanged the game stays the scanner's, or a quality change would freeze it.
                 using (var current = _database.Command(
                            "SELECT title, launch_command, install_path, removed_at FROM games WHERE id = $id;"))
                 {
@@ -607,11 +615,8 @@ internal sealed class GameLibrary
                  $"What was edited about it is kept for {KeepRemoved.TotalDays:0} days.");
     }
 
-    // Puts a game back as its store found it: the row goes, with any hidden one the scan would
-    // otherwise meet again under the same command or identifier, and the next scan writes it
-    // anew — the found name, command and folder, no cover chosen, every switch at its default.
-    // A game added by hand has nothing to go back to and is refused. The cover file is left for
-    // the sweep of pictures that belong to no game.
+    // Puts a game back as its store found it: its rows go and the next scan writes it anew.
+    // Refused for a game added by hand; the cover file is left to the sweep.
     internal string Reset(long id)
     {
         lock (_database.Gate)
@@ -781,19 +786,22 @@ internal sealed class GameLibrary
         }
     }
 
-    // Whether the starting card is shown for this game while it loads. On by default; the switch
-    // exists for the odd game a static card in front of it confuses.
-    internal void RecordShowCard(long gameId, bool wanted)
+    // When the starting card covers this game's start. Auto by default, which is also what the
+    // old "on" (1) reads as; the old "off" (0) is Never.
+    internal void RecordSplash(long gameId, SplashMode splash)
     {
         lock (_database.Gate)
         {
             using var command = _database.Command(
                 "UPDATE games SET starting_card = $card WHERE id = $id;");
-            command.Parameters.AddWithValue("$card", wanted ? 1 : 0);
+            command.Parameters.AddWithValue("$card", (int)splash);
             command.Parameters.AddWithValue("$id", gameId);
             command.ExecuteNonQuery();
         }
     }
+
+    private static SplashMode Splash(long stored) =>
+        Enum.IsDefined(typeof(SplashMode), (int)stored) ? (SplashMode)stored : SplashMode.Auto;
 
     // How much work the encoder puts into this game. Anything the database does not recognise is
     // High, which is where every game starts.
@@ -835,7 +843,7 @@ internal sealed class GameLibrary
                 reader.GetString(2),
                 reader.GetInt64(3) != 0,
                 Quality(reader.GetInt64(4)),
-                reader.GetInt64(5) != 0,
+                Splash(reader.GetInt64(5)),
                 reader.IsDBNull(6) ? null : reader.GetString(6));
         }
     }

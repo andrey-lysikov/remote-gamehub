@@ -222,9 +222,8 @@ internal static class ServiceHost
                 // is the service giving up: this is the one record of how the worker ended.
                 if (code == DbgTerminateProcess)
                 {
-                    // Windows ending the session's processes: a sign-out or a shutdown, never a
-                    // fault. The session still reads as active and signed in, because the news of
-                    // its end reaches this service a moment after the worker is gone.
+                    // Windows ending the session's processes: a sign-out or shutdown, not a fault.
+                    // The session still reads as signed in; the news arrives after the worker is gone.
                     Log.Event(
                         $"the worker (pid {pid}) ended after {lived.TotalSeconds:0} s, " +
                         $"{DescribeExit(code)}: a sign-out or a shutdown, not a fault");
@@ -474,10 +473,8 @@ internal static class ServiceHost
                 return Advapi32.NO_ERROR;
 
             case Advapi32.SERVICE_CONTROL_SESSIONCHANGE:
-                // Every reason is treated the same, and none of them is acted on here: the
-                // supervisor asks Windows which session the console is now and decides from that.
-                // Written down all the same: this is the only record of what moved and when, and
-                // a worker that ends seconds after a sign-out ended with it rather than by itself.
+                // Not acted on: the supervisor asks Windows where the console is and decides from that.
+                // Logged as the only record of what moved and when, to explain a worker that ends.
                 Log.Event($"session {Wtsapi32.SessionOf(eventData)}: " +
                           Wtsapi32.DescribeChange(eventType));
 
@@ -485,14 +482,12 @@ internal static class ServiceHost
                 return Advapi32.NO_ERROR;
 
             case Advapi32.SERVICE_CONTROL_POWEREVENT:
-                // Not acted on: the worker is told the same thing in its own session and ends the
-                // stream itself, which is where the stream is. Written down because a log that
-                // skips the sleep makes the hours either side of it read as one unbroken run.
+                // Not acted on: the worker hears it too and ends its own stream. Logged so the hours
+                // either side of a sleep do not read as one unbroken run.
                 Log.Event(Advapi32.DescribePowerEvent(eventType));
 
-                // A wake can come with the console somewhere else — a remote desktop connection is
-                // one of the things that wakes a machine — so the supervisor looks now, not in a
-                // second's time. A suspend costs it one harmless turn.
+                // A wake can move the console (remote desktop wakes machines), so the supervisor
+                // looks now rather than in a second. A suspend costs one harmless turn.
                 SessionChanged.Set();
                 return Advapi32.NO_ERROR;
 

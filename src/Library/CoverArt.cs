@@ -1,7 +1,6 @@
 //  Copyright © AndreyLysikov
 //  SPDX-License-Identifier: Apache-2.0
 
-using System.Net.Http;
 using System.Text.Json;
 using RemoteGameHub.App;
 
@@ -73,7 +72,7 @@ internal static class CoverArt
             {
                 if (cancel.IsCancellationRequested) return;
 
-                var path = await FetchOneAsync(http, catalogue, candidate, folder, config, cancel);
+                var path = await FetchOneAsync(http, catalogue, candidate, folder, cancel);
                 library.RecordArtwork(candidate.Id, path);
 
                 if (path is not null)
@@ -103,7 +102,7 @@ internal static class CoverArt
 
     // Everything the store answers for a title, unfiltered, for a person to choose from; the
     // automatic search filters because nobody is watching it.
-    internal static async Task<IReadOnlyList<Candidate>> SearchAllAsync(string title, AppConfig config,
+    internal static async Task<IReadOnlyList<Candidate>> SearchAllAsync(string title,
                                                                         CancellationToken cancel)
     {
         var found = new List<Candidate>();
@@ -267,8 +266,7 @@ internal static class CoverArt
 
     private static async Task<string?> FetchOneAsync(HttpClient http, GameDb catalogue,
                                                      ArtworkCandidate candidate,
-                                                     string folder, AppConfig config,
-                                                     CancellationToken cancel)
+                                                     string folder, CancellationToken cancel)
     {
         try
         {
