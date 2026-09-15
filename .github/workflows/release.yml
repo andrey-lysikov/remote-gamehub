@@ -34,6 +34,7 @@ jobs:
           if (-not $version) { throw "No <Version> in $csproj" }
           $version = "$version".Trim()
           Write-Host "Version in the project: $version"
+          if ($version -notmatch '^\d+\.\d+$') { throw "Version $version in $csproj is not major.minor" }
 
           $previous = git tag --list 'v[0-9]*' --sort=-v:refname | Select-Object -First 1
           Write-Host "Newest tag: $(if ($previous) { $previous } else { '(none)' })"

@@ -17,7 +17,7 @@
                  Transparent="yes" NoPrefix="yes" Text="[ProductName] is already installed on this computer." />
 
         <Control Id="Where" Type="Text" X="20" Y="55" Width="330" Height="30" NoPrefix="yes"
-                 Text="It will be updated to version [ProductVersion] where it is installed:&#10;[APPLICATIONFOLDER]" />
+                 Text="It will be updated to version $(DisplayVersion) where it is installed:&#10;[APPLICATIONFOLDER]" />
 
         <Control Id="Note" Type="Text" X="20" Y="95" Width="330" Height="60" Transparent="yes" NoPrefix="yes"
                  Text="The server stops while its files are replaced and starts again on its own. A stream in progress ends; it can be started again from the client a few seconds later.&#10;&#10;Advanced changes the shortcuts; everything else stays as it is." />

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="0.5.0.0" name="Remote-Gamehub" />
+  <!-- A manifest takes four numbers only: the project's Version (two) with .0.0 after it. -->
+  <assemblyIdentity version="1.5.0.0" name="Remote-Gamehub" />
 
   <!-- Always elevated: capture, the encoder session and input injection all fail without it. The
        app still checks at run time, since a manifest is a request, not a guarantee. -->

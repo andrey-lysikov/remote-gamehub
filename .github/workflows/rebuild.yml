@@ -41,7 +41,7 @@ jobs:
           Write-Host "Rebuilding the installer of $tag from $($env:GITHUB_SHA)"
 
           $version = $tag -replace '^v', ''
-          if ($version -notmatch '^\d+\.\d+(\.\d+)?$') { throw "The tag $tag is not a version." }
+          if ($version -notmatch '^\d+\.\d+$') { throw "The tag $tag is not a version." }
 
           "tag=$tag"         >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT

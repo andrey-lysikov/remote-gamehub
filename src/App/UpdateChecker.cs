@@ -107,6 +107,9 @@ internal sealed class UpdateChecker : IDisposable
 
             if (!IsNewer(latest, current)) return Outcome.Current;
 
+            // Shown as major.minor, as this server shows its own: a tag of v1.6.0 is still "1.6".
+            latest = Version.Parse(latest).ToString(2);
+
             if (_newer != latest)
             {
                 _newer = latest;
