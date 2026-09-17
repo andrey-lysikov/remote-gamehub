@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6
+
+* Clients now fetch a game's cover again when it changes
+* Some settings have been removed as they are no longer required
+
 ## 1.5
 
 * If uPNP enabled, we can ban ips if it ddos.
