@@ -443,8 +443,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
 
     private string AppList() => BuildDocument(xml =>
     {
-        foreach (var game in _games.List())
-            WriteApp(xml, AppParameters.Protocol.GameAppIdOffset + game.Id, game.Title);
+        foreach (var game in _games.List(_sessions.CurrentAppId))
+            WriteApp(xml, game.ClientId, game.Title);
 
         // The desktop last, after the games: it always works whatever the scanners found, and the
         // games are what a person opened the client to look for.
@@ -562,9 +562,8 @@ internal sealed class GameStreamServer : IAsyncDisposable
                            CultureInfo.InvariantCulture, out var appId))
             return null;
 
-        if (appId <= AppParameters.Protocol.GameAppIdOffset) return null;
-
-        return _games.BoxArtPath(appId - AppParameters.Protocol.GameAppIdOffset);
+        var gameId = _games.GameIdForClient(appId);
+        return gameId > 0 ? _games.BoxArtPath(gameId) : null;
     }
 
     // Starts a session. The client sends the key its input and control messages are encrypted

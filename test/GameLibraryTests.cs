@@ -262,6 +262,47 @@ public class GameLibraryTests
     }
 
     [Fact]
+    public void A_new_cover_gives_the_game_a_new_client_number_and_keeps_its_row()
+    {
+        using var folder = new TestFolder();
+        using var database = Database.Open(folder.Path);
+        var library = new GameLibrary(database);
+
+        var id = library.Save(0, "One", @"C:\one.exe", null);
+        var cover = folder.File(@"covers\1.jpg", "the first picture");
+        library.RecordArtwork(id, cover);
+
+        var first = library.List().Single().ClientId;
+        Assert.NotEqual(AppParameters.Protocol.DesktopAppId, first);
+        Assert.True(first > 0);
+        Assert.Equal(first, library.List().Single().ClientId);   // nothing changed, nothing moves
+        Assert.Equal(id, library.GameIdForClient(first));
+
+        // Replaced at the same path, as the page does: a new number, the same row.
+        File.WriteAllText(cover, "a second picture, longer than the first");
+        var second = library.List().Single().ClientId;
+
+        Assert.NotEqual(first, second);
+        Assert.Equal(id, library.GameIdForClient(second));
+        Assert.Equal(0, library.GameIdForClient(first));
+
+        // Not while it streams: /serverinfo reports the number it was started by.
+        File.WriteAllText(cover, "a third picture, longer again than the second one");
+        Assert.Equal(second, library.List(running: second).Single().ClientId);
+        Assert.NotEqual(second, library.List().Single().ClientId);
+    }
+
+    [Fact]
+    public void Client_numbers_are_the_common_crc32_cut_to_a_positive_int()
+    {
+        // With no cover only the title is hashed. "123456789" is CRC-32's check string: 0xCBF43926,
+        // which without its top bit is 0x4BF43926.
+        var (plain, indexed) = GameLibrary.ClientIds(7, "123456789", null);
+        Assert.Equal(0x4BF4_3926, plain);
+        Assert.NotEqual(plain, indexed);
+    }
+
+    [Fact]
     public void A_cover_missing_from_disk_is_offered_again()
     {
         using var folder = new TestFolder();

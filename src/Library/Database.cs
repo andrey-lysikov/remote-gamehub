@@ -239,6 +239,23 @@ internal sealed class Database : IDisposable
             version = 13;
         }
 
+        if (version < 14)
+        {
+            // The number a client knows this game by, apart from the row id: CRC32 of the title and
+            // the cover's SHA-256, as Sunshine does. Clients keep a cover forever under that number,
+            // so a new picture has to arrive under a new one. client_key is what it was worked out
+            // from (title, cover path, size, write time); NULL for both means not worked out yet.
+            Execute(_connection,
+                """
+                ALTER TABLE games ADD COLUMN client_id INTEGER;
+                ALTER TABLE games ADD COLUMN client_key TEXT;
+                CREATE INDEX games_client_id ON games (client_id);
+                """);
+
+            Execute(_connection, "PRAGMA user_version = 14;");
+            version = 14;
+        }
+
         Log.Info(from == version
             ? $"database {Path}, schema version {version}"
             : $"database {Path}, schema migrated from version {from} to {version}");

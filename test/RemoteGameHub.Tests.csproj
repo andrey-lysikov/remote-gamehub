@@ -9,12 +9,10 @@
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
-    <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <RootNamespace>RemoteGameHub.Tests</RootNamespace>
-
     <!-- Internal classes are tested through InternalsVisibleTo in the server's csproj: making
          them public just for the tests would shape the server around its verification. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>

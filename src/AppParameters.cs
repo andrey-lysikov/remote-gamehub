@@ -138,9 +138,8 @@ internal static class AppParameters
 
         internal const string DesktopAppTitle = "Desktop";
 
-        // A game's identifier over the protocol is its database row id plus this. Desktop is 1 and
-        // the database numbers its rows from 1, so the two ranges must never be able to meet.
-        internal const int GameAppIdOffset = 1000;
+        // A game's identifier over the protocol is not its row id but games.client_id, worked out
+        // from its title and cover (GameLibrary.List), which never takes the desktop's number.
 
         // The codec bits of ServerCodecModeSupport, from Limelight.h's SCM_ values.
         internal const int CodecH264 = 0x0001;

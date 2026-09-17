@@ -2,6 +2,8 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using RemoteGameHub.App;
 
 namespace RemoteGameHub.Library;
@@ -17,8 +19,8 @@ internal sealed record ScannedGame(
     // Where the game is started from, when that is not InstallPath.
     string? WorkingDirectory = null);
 
-// One game as /applist needs it.
-internal sealed record ListedGame(long Id, string Title);
+// One game as /applist needs it. ClientId is the number the client is given; Id stays ours.
+internal sealed record ListedGame(long Id, int ClientId, string Title);
 
 // A game with no picture yet, as the artwork worker needs to search for one.
 internal sealed record ArtworkCandidate(long Id, string Source, string? ExternalId, string Title);
@@ -320,24 +322,159 @@ internal sealed class GameLibrary
         command.ExecuteNonQuery();
     }
 
-    // Everything /applist serves, ordered by title. The identifiers here are database row ids; the
-    // protocol adds AppParameters.Protocol.GameAppIdOffset before a client sees them.
-    internal IReadOnlyList<ListedGame> List()
+    // Everything /applist serves, ordered by title, each with the number the client is to know it
+    // by. Those numbers are brought up to date here, and only here: a client learns a new one from
+    // this list, so it must never change between the list and the launch or cover asked for from
+    // it. running is the client number of the game streaming now, kept as it is while it runs, or
+    // /serverinfo would name a game the list no longer has.
+    internal IReadOnlyList<ListedGame> List(int running = 0)
     {
         var games = new List<ListedGame>();
 
         lock (_database.Gate)
         {
-            using var command = _database.Command(
-                "SELECT id, title FROM games WHERE removed_at IS NULL " +
-                "ORDER BY title COLLATE NOCASE;");
+            var rows = new List<(long Id, string Title, string? Art, int? ClientId, string? Key)>();
 
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-                games.Add(new ListedGame(reader.GetInt64(0), reader.GetString(1)));
+            // In row order, so that of two games whose numbers meet the older keeps its own.
+            using (var command = _database.Command(
+                       "SELECT id, title, box_art_path, client_id, client_key FROM games " +
+                       "WHERE removed_at IS NULL ORDER BY id;"))
+            {
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    rows.Add((reader.GetInt64(0), reader.GetString(1),
+                              reader.IsDBNull(2) ? null : reader.GetString(2),
+                              reader.IsDBNull(3) ? null : reader.GetInt32(3),
+                              reader.IsDBNull(4) ? null : reader.GetString(4)));
+                }
+            }
+
+            // Zero is "nothing running" to a client and the desktop has its own; neither is a game's.
+            var taken = new HashSet<int> { 0, AppParameters.Protocol.DesktopAppId };
+            var runningListed = running != 0 && rows.Any(row => row.ClientId == running);
+            if (runningListed) taken.Add(running);
+
+            foreach (var row in rows)
+            {
+                var key = ClientKey(row.Title, row.Art);
+                int clientId;
+
+                if (runningListed && row.ClientId == running)
+                {
+                    clientId = running;
+                    runningListed = false;
+                }
+                else if (row.ClientId is { } known && row.Key == key && taken.Add(known))
+                {
+                    clientId = known;
+                }
+                else
+                {
+                    var (plain, indexed) = ClientIds(row.Id, row.Title, row.Art);
+                    clientId = plain;
+
+                    if (!taken.Add(clientId))
+                    {
+                        // Both taken is one chance in four billion twice over; then the next free
+                        // number rather than a duplicate, which would start the wrong game.
+                        clientId = indexed;
+                        while (!taken.Add(clientId)) clientId = clientId == int.MaxValue ? 2 : clientId + 1;
+                    }
+
+                    using var update = _database.Command(
+                        "UPDATE games SET client_id = $client, client_key = $key WHERE id = $id;");
+                    update.Parameters.AddWithValue("$client", clientId);
+                    update.Parameters.AddWithValue("$key", key);
+                    update.Parameters.AddWithValue("$id", row.Id);
+                    update.ExecuteNonQuery();
+
+                    if (row.ClientId is not null && row.ClientId != clientId)
+                    {
+                        Log.Info($"\"{row.Title}\" is now {clientId} to clients (was {row.ClientId}): " +
+                                 "its name or cover changed, and clients fetch the cover again");
+                    }
+                }
+
+                games.Add(new ListedGame(row.Id, clientId, row.Title));
+            }
         }
 
-        return games;
+        return games
+            .OrderBy(game => game.Title, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // Our row id for the number a client sent, or zero when no game on the list has it: an old
+    // number from before the cover changed, or the desktop.
+    internal long GameIdForClient(long clientId)
+    {
+        lock (_database.Gate)
+        {
+            using var command = _database.Command(
+                "SELECT id FROM games WHERE client_id = $client AND removed_at IS NULL " +
+                "ORDER BY id LIMIT 1;");
+            command.Parameters.AddWithValue("$client", clientId);
+
+            return command.ExecuteScalar() is long id ? id : 0;
+        }
+    }
+
+    // What the client number is worked out from, cheaply: the title, and the cover by path, size
+    // and write time. A cover replaced at the same path changes the last two, and only when this
+    // changes is the file read and hashed again.
+    private static string ClientKey(string title, string? art)
+    {
+        if (string.IsNullOrEmpty(art)) return title;
+
+        var file = new FileInfo(art);
+        return file.Exists
+            ? $"{title}\n{art}\n{file.Length}\n{file.LastWriteTimeUtc.Ticks}"
+            : $"{title}\n{art}";
+    }
+
+    // Sunshine's calculate_app_id: CRC32 of the title followed by the cover's SHA-256 (its path if
+    // the file cannot be read), cut to a positive 32-bit number, as clients keep it in an int. The
+    // second is the first with an index added, for when two games meet; ours is the row id, which
+    // unlike a position in the list does not move when a game is added before it.
+    internal static (int Plain, int Indexed) ClientIds(long rowId, string title, string? art)
+    {
+        var text = new StringBuilder(title);
+
+        if (!string.IsNullOrEmpty(art) && File.Exists(art))
+        {
+            try
+            {
+                using var stream = new FileStream(art, FileMode.Open, FileAccess.Read,
+                                                  FileShare.ReadWrite | FileShare.Delete);
+                text.Append(Convert.ToHexStringLower(SHA256.HashData(stream)));
+            }
+            catch (Exception error)
+            {
+                Log.Info($"the cover of \"{title}\" could not be read for its number: {error.Message}");
+                text.Append(art);
+            }
+        }
+
+        var plain = Encoding.UTF8.GetBytes(text.ToString());
+        var indexed = Encoding.UTF8.GetBytes(text.Append(rowId.ToString(CultureInfo.InvariantCulture)).ToString());
+
+        return ((int)(Crc32(plain) & 0x7FFF_FFFF), (int)(Crc32(indexed) & 0x7FFF_FFFF));
+    }
+
+    private static readonly uint[] Crc32Table = Enumerable.Range(0, 256).Select(n =>
+    {
+        var c = (uint)n;
+        for (var k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB8_8320 ^ (c >> 1) : c >> 1;
+        return c;
+    }).ToArray();
+
+    // The common CRC-32 (zlib's, and Boost's crc_32_type that Sunshine uses).
+    private static uint Crc32(ReadOnlySpan<byte> data)
+    {
+        var crc = 0xFFFF_FFFFu;
+        foreach (var b in data) crc = Crc32Table[(crc ^ b) & 0xFF] ^ (crc >> 8);
+        return ~crc;
     }
 
     // How many games the list would hold. Asked once a second by the page, which used to run the

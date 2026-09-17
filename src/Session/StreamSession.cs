@@ -192,7 +192,9 @@ internal sealed class SessionManager : IDisposable
 
         // What the client is shown while the game loads: its own picture and its name. Gathered
         // here because this is where the library and the watcher live.
-        var gameId = request.AppId - AppParameters.Protocol.GameAppIdOffset;
+        var gameId = request.AppId == AppParameters.Protocol.DesktopAppId
+            ? 0
+            : _games.GameIdForClient(request.AppId);
         var target = gameId > 0 ? _games.Target(gameId) : null;
         var poster = gameId > 0 ? _games.BoxArtPath(gameId) : null;
 
@@ -498,7 +500,7 @@ internal sealed class SessionManager : IDisposable
             if (_watcher is { IsRunning: true } running && running.AppId == appId) return true;
         }
 
-        var gameId = appId - AppParameters.Protocol.GameAppIdOffset;
+        var gameId = _games.GameIdForClient(appId);
         var target = gameId > 0 ? _games.Target(gameId) : null;
 
         if (target is null)

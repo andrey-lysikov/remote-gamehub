@@ -427,14 +427,12 @@ internal sealed class WebConsole : IAsyncDisposable
         await WriteAsync(stream, 200, "text/html; charset=utf-8", Page());
     }
 
-    // Which row is streaming right now, as the identifier the protocol uses less the offset games
-    // are numbered from. Zero is the desktop, and no tile carries that, so zero means none.
+    // Which row is streaming right now, found from the number the client started it by. Zero is
+    // nothing or the desktop, and no tile carries that, so zero means none.
     private long RunningGameId()
     {
         var appId = _sessions.CurrentAppId;
-        return appId > AppParameters.Protocol.GameAppIdOffset
-            ? appId - AppParameters.Protocol.GameAppIdOffset
-            : 0;
+        return appId is 0 or AppParameters.Protocol.DesktopAppId ? 0 : _games.GameIdForClient(appId);
     }
 
     // The games, as the page shows them. Rendered here rather than sent as data: the server
