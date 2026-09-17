@@ -304,9 +304,13 @@ internal sealed class GameLibrary
                 -- The game is here again. Whatever was edited about it before it went is exactly
                 -- what this row still holds, which is the reason it was kept rather than deleted.
                 removed_at   = NULL,
-                -- Scans rarely find local art; a cover fetched online must survive them, so a
-                -- scanner with nothing to say leaves what is there.
-                box_art_path = COALESCE(excluded.box_art_path, games.box_art_path),
+                -- A cover chosen on the page outlives the scan: Xbox and Steam offer their own
+                -- picture every time, and taking it orphaned the chosen file for the sweep to
+                -- delete. Otherwise a cover fetched online must survive a scanner with nothing
+                -- to say, so that leaves what is there.
+                box_art_path = CASE WHEN games.art_manual = 1 AND games.box_art_path IS NOT NULL
+                                    THEN games.box_art_path
+                                    ELSE COALESCE(excluded.box_art_path, games.box_art_path) END,
                 last_seen_at = excluded.last_seen_at;
             """);
 
