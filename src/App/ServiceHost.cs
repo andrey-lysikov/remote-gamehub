@@ -414,8 +414,12 @@ internal static class ServiceHost
     {
         if (_worker == 0) return;
 
-        // A moment to leave on its own first: Quit and a shutdown both reach here with the worker
-        // already on its way out. Only one still there afterwards is ended; it has no window.
+        // Asked first, so it leaves the way Quit does: the stream ended and the screen put back.
+        // Killed outright, it leaves the desktop at whatever size and scale the client asked for.
+        WorkerStop.Ask();
+
+        // A moment to leave on its own: asked, or already on its way out after Quit or a shutdown.
+        // Only one still there afterwards is ended; it has no window.
         if (Kernel32.WaitForMultipleObjects(1, new[] { _worker }, true, GracefulExitMs) != 0)
         {
             // Said here because the worker cannot say it: ended from outside, its own log stops

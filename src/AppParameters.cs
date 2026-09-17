@@ -27,6 +27,10 @@ internal static class AppParameters
         // Single-instance mutex. Global, because the ports are machine-wide.
         internal const string Mutex = @"Global\RemoteGameHub.SingleInstance";
 
+        // Set by the service to ask its worker to close the way Quit does. Global, because the
+        // service is in session 0 and the worker is in the session it serves.
+        internal const string WorkerStopEvent = @"Global\RemoteGameHub.WorkerStop";
+
         // The scheduled task that starts the server at sign-in. Named after the product so that it
         // is recognisable in Task Scheduler.
         internal const string StartupTask = DisplayName;

@@ -14,7 +14,7 @@ obj/
 # The application's own files, wherever a test run leaves them.
 Remote-Gamehub.conf
 Remote-Gamehub.log
-Remote-Gamehub.log.old
+Remote-Gamehub.log.*
 # The server's own certificate and private key, made on the first run.
 Remote-Gamehub.pem
 Remote-Gamehub-capture.png

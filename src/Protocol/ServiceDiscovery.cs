@@ -319,7 +319,10 @@ internal sealed class ServiceDiscovery : IDisposable
         }
         catch (Exception error)
         {
-            Log.Info($"a discovery answer could not be sent to {destination}: {error.Message}");
+            // Once per destination in a while: every query is answered twice, and a network still
+            // coming up at startup refuses a whole burst of them in the same few milliseconds.
+            Log.InfoOccasionally($"discovery answer to {destination}",
+                $"a discovery answer could not be sent to {destination}: {error.Message}");
         }
     }
 

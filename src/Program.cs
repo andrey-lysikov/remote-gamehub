@@ -635,6 +635,31 @@ internal static class Program
                  "Set [Network] BindAddress to one address of this machine if it is also on a\n" +
                  "network you do not trust.");
 
+        // The service asking its worker to close: handed to this thread and taken as Quit, so the
+        // stream is ended and the screen restored. A window of its own only to be handed to.
+        var askedToStop = false;
+        using var loop = new Control();
+        _ = loop.Handle;
+
+        using var stopRequest = _isWorker
+            ? WorkerStop.Listen(() =>
+            {
+                try
+                {
+                    loop.BeginInvoke(() =>
+                    {
+                        Log.Event("the service asked this worker to close");
+                        askedToStop = true;
+                        Application.Exit();
+                    });
+                }
+                catch (Exception error) when (error is InvalidOperationException or ObjectDisposedException)
+                {
+                    // The loop is already over: the process is leaving anyway.
+                }
+            })
+            : null;
+
         Application.Run(new ApplicationContext());
 
         // The listeners are shut down before the tray icon goes, so a client reconnecting in those
@@ -649,7 +674,8 @@ internal static class Program
 
         // Last of all, and only for the worker: everything is shut down, so the service may end this
         // process at once. Otherwise it would see its worker gone and start another, unlike Quit.
-        if (_isWorker) ServiceControl.StopIfRunning();
+        // Not when the service asked: it is stopping already, or moving the worker to another session.
+        if (_isWorker && !askedToStop) ServiceControl.StopIfRunning();
 
         return 0;
     }

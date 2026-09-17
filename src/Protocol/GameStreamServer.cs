@@ -332,7 +332,9 @@ internal sealed class GameStreamServer : IAsyncDisposable
         }
         catch (Exception error)
         {
-            Log.Info($"the TLS handshake failed: {error.Message}");
+            // Who it was: with the ports forwarded, most of these are scanners, not clients.
+            var peer = Peer.Describe((client.Client.RemoteEndPoint as IPEndPoint)?.Address);
+            Log.Info($"the TLS handshake with {peer} failed: {error.Message}");
             await tls.DisposeAsync();
             return null;
         }

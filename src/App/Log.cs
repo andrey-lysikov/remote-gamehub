@@ -149,7 +149,14 @@ internal static unsafe class Log
 
     // A warning from somewhere that runs many times a second. Said once, then held for half a
     // minute however often it recurs; subject is what counts as "the same complaint".
-    internal static void WarnOccasionally(string subject, string message)
+    internal static void WarnOccasionally(string subject, string message) =>
+        Occasionally(LogLevel.Warn, subject, message);
+
+    // The same, for a note rather than a complaint: a transient failure that clears by itself.
+    internal static void InfoOccasionally(string subject, string message) =>
+        Occasionally(LogLevel.Info, subject, message);
+
+    private static void Occasionally(LogLevel level, string subject, string message)
     {
         lock (Gate)
         {
@@ -158,7 +165,7 @@ internal static unsafe class Log
             LastSaid[subject] = now;
         }
 
-        Write(LogLevel.Warn, message);
+        Write(level, message);
     }
 
     internal static void Error(string message, Exception error) =>
