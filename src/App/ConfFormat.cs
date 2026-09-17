@@ -13,13 +13,9 @@ internal static class ConfFormat
 
         config.Debug = file.Bool("General", "Debug", config.Debug);
         config.HostName = file.Text("General", "HostName", config.HostName);
-        config.VirtualMouse = file.Bool("General", "VirtualMouse", config.VirtualMouse);
         config.VirtualDisplay = file.Bool("General", "VirtualDisplay", config.VirtualDisplay);
 
         config.Output = file.Text("Display", "Output", config.Output);
-        config.Encoder = file.Enum("Display", "Encoder", config.Encoder);
-        config.Adapt = file.Bool("Display", "Adapt", config.Adapt);
-        config.ScaleDesktop = file.Bool("Display", "ScaleDesktop", config.ScaleDesktop);
 
         config.PortBase = file.Number("Network", "PortBase", config.PortBase,
             AppParameters.Limits.MinPortBase, AppParameters.Limits.MaxPortBase, warn);
@@ -43,7 +39,6 @@ internal static class ConfFormat
         config.GamesFolders = file.List("Games", "Folders", config.GamesFolders);
         config.GamesDepth = file.Number("Games", "Depth", config.GamesDepth,
             AppParameters.Limits.MinGamesFolderDepth, AppParameters.Limits.MaxGamesFolderDepth, warn);
-        config.GamesArtwork = file.Bool("Artwork", "Enabled", config.GamesArtwork);
 
         return config;
     }
@@ -59,9 +54,6 @@ internal static class ConfFormat
         writer.Note("The name Moonlight shows for this machine. \"auto\" uses the computer name.");
         writer.Key("HostName", config.HostName);
         writer.Blank();
-        writer.Note("If you don't have a real HID device, we can emulate one.");
-        writer.Key("VirtualMouse", config.VirtualMouse);
-        writer.Blank();
         writer.Note("Prefer a virtual display driver over a real screen, when one is found. This server never\n" +
                     "installs one itself; the installer's own checkbox does, if you asked it to.");
         writer.Key("VirtualDisplay", config.VirtualDisplay);
@@ -70,15 +62,6 @@ internal static class ConfFormat
         writer.Note("Which screen to stream: \"auto\" for the one attached to the desktop, a screen's own\n" +
                     "number (shown in the log at startup) or a piece of its name for another.");
         writer.Key("Output", config.Output);
-        writer.Blank();
-        writer.Note("Which card encodes use \"auto\" follows whichever card the screen above is on.");
-        writer.Key("Encoder", config.Encoder.ToString());
-        writer.Blank();
-        writer.Note("Adapt host screen to client resolution and settings compliance");
-        writer.Key("Adapt", config.Adapt);
-        writer.Blank();
-        writer.Note("Scale the desktop up while it is streamed to a client");
-        writer.Key("ScaleDesktop", config.ScaleDesktop);
 
         writer.Section("Network");
         writer.Note("First port of the block Moonlight expects. Every other port is derived from it.");
@@ -113,10 +96,6 @@ internal static class ConfFormat
         writer.Blank();
         writer.Note("How many folder levels below each of those to look into. 1 is the folder itself.");
         writer.Key("Depth", config.GamesDepth);
-
-        writer.Section("Artwork");
-        writer.Note("Fetch the posters of installed games");
-        writer.Key("Enabled", config.GamesArtwork);
 
         return writer.ToString();
     }

@@ -37,10 +37,10 @@ internal enum StreamQuality
     Lossless,
 }
 
+// Which of the two implementations a card got. Not a setting: it follows the adapter that owns
+// the captured output, and preflight refuses a machine whose card is neither.
 internal enum VideoEncoder
 {
-    // Picked from the adapter that owns the captured output.
-    Auto,
     // NVIDIA NVENC, through nvEncodeAPI64.dll from the display driver.
     NvEnc,
     // AMD AMF, through amfrt64.dll from the display driver.
@@ -55,10 +55,6 @@ internal sealed class AppConfig
     // Off; DebugWasAbsent makes the first run verbose regardless, so it is logged in full too.
     internal bool Debug { get; set; } = false;
     internal string HostName { get; set; } = "auto";
-
-    // The cursor this server draws into a stream's own picture, for the desktop always and for a
-    // game only when that game's switch asks for one. Off turns both off, whatever a game asks.
-    internal bool VirtualMouse { get; set; } = true;
 
     // Prefer a third-party virtual display driver, when Output is "auto" and one is already on
     // the machine — this server never installs or fetches one; see the installer's checkbox.
@@ -83,17 +79,10 @@ internal sealed class AppConfig
     // [Display]. The codec, the frame rate and the bitrate have no setting of their own: they are
     // the client's to choose, and every ceiling here was caught halving one silently.
     internal string Output { get; set; } = "auto";
-    internal VideoEncoder Encoder { get; set; } = VideoEncoder.Auto;
 
     // Only the capture self-test reads this — not [Display]: a stream decides its own pointer for
     // itself, always for the desktop and for a game only when that game's own switch asks for one.
     internal bool CaptureCursor { get; set; } = true;
-
-    internal bool Adapt { get; set; } = true;
-
-    // Scale the desktop up for a client whose screen has more pixels than this one. Streams of
-    // the desktop only; a game draws itself and is not affected.
-    internal bool ScaleDesktop { get; set; } = true;
 
     // [Games]
     internal bool Steam { get; set; } = true;
@@ -105,7 +94,6 @@ internal sealed class AppConfig
 
     internal IReadOnlyList<string> GamesFolders { get; set; } = Array.Empty<string>();
     internal int GamesDepth { get; set; } = 2;
-    internal bool GamesArtwork { get; set; } = true;
 
     // Where this instance was read from, or where it will be written.
     internal string Path { get; private set; } = string.Empty;
@@ -212,8 +200,8 @@ internal sealed class AppConfig
         return new AppConfig { Path = candidates[0], IsFirstRun = true, DebugWasAbsent = true };
     }
 
-    // Takes [Games] and [Artwork] from a freshly read file, so "Refresh games" notices a folder
-    // added since startup. Only these: the rest built the listeners and the encoder session.
+    // Takes [Games] from a freshly read file, so "Refresh games" notices a folder added since
+    // startup. Only these: the rest built the listeners and the encoder session.
     internal void AdoptScanSettings(AppConfig fresh)
     {
         Steam = fresh.Steam;
@@ -225,8 +213,6 @@ internal sealed class AppConfig
 
         GamesFolders = fresh.GamesFolders;
         GamesDepth = fresh.GamesDepth;
-
-        GamesArtwork = fresh.GamesArtwork;
     }
 
     // Writes to Path. Throws; the caller decides how loud that is.

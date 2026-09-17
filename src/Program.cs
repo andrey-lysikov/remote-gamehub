@@ -101,7 +101,6 @@ internal static class Program
             {
                 Log.SetVerbose(true);
 
-                var probeConfig = AppConfig.Load(Log.Warn);
                 var adapters = DisplayInventory.Enumerate();
                 Log.Info(DisplayInventory.Describe(adapters));
 
@@ -117,7 +116,7 @@ internal static class Program
                     return 1;
                 }
 
-                var probed = VideoEncoders.Probe(card, probeConfig);
+                var probed = VideoEncoders.Probe(card);
                 Log.Info(probed.Refusal is null
                     ? $"encoder test: {probed.Encoder} opened on adapter {card.Index} " +
                       $"\"{card.Name}\" — H.264 {(probed.H264 ? "yes" : "no")}, " +
@@ -361,7 +360,7 @@ internal static class Program
 
         // Opened and closed once, so that /serverinfo reports what the card can really encode and
         // a driver problem is a line here rather than a client-side timeout at the first launch.
-        var encoder = VideoEncoders.Probe(preflight.Adapter!, config);
+        var encoder = VideoEncoders.Probe(preflight.Adapter!);
         if (encoder.CanStream)
         {
             var codecs = new[]
@@ -536,7 +535,7 @@ internal static class Program
         // The pictures the client shows beside each game, started here rather than inside the scan:
         // a large library can take minutes, and none of it should hold up a client connecting now.
         using var artwork = new CancellationTokenSource();
-        _ = CoverArt.FetchAsync(games, directory, config, artwork.Token);
+        _ = CoverArt.FetchAsync(games, directory, artwork.Token);
 
         // The scan, again, from wherever it is asked for after the start. One at a time — two scans
         // interleaving their writes would each mark the other's games as gone — and never inline.
@@ -549,8 +548,8 @@ internal static class Program
                 {
                     Log.Info($"scanning the games again: {why}");
 
-                    // The [Games] and [Artwork] settings are read again here, and only they: a
-                    // person adding a folder to the file and asking for a refresh means it scanned.
+                    // The [Games] settings are read again here, and only they: a person adding a
+                    // folder to the file and asking for a refresh means it scanned.
                     try
                     {
                         config.AdoptScanSettings(AppConfig.Load(Log.Warn));
@@ -564,7 +563,7 @@ internal static class Program
                     }
 
                     UserContext.AsConsoleUser(() => games.Rescan(config));
-                    _ = CoverArt.FetchAsync(games, directory, config, artwork.Token);
+                    _ = CoverArt.FetchAsync(games, directory, artwork.Token);
                 }
                 catch (Exception error)
                 {

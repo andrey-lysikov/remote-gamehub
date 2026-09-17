@@ -35,7 +35,7 @@ internal static class CoverArt
 
     // Finds and stores the missing pictures. Never throws: a picture is the least important thing
     // this server has, and no failure here may disturb a stream.
-    internal static async Task FetchAsync(GameLibrary library, string directory, AppConfig config,
+    internal static async Task FetchAsync(GameLibrary library, string directory,
                                           CancellationToken cancel)
     {
         var folder = Path.Combine(directory, Folder);
@@ -49,8 +49,6 @@ internal static class CoverArt
             if (forgotten > 0)
                 Log.Info($"{forgotten} cover picture(s) were gone from disk and will be looked " +
                          "up again");
-
-            if (!config.GamesArtwork) return;
 
             var candidates = library.NeedingArtwork(RetryAfter);
             if (candidates.Count == 0) return;

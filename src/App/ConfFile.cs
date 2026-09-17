@@ -124,18 +124,6 @@ internal sealed class ConfFile
     }
 
 
-    internal T Enum<T>(string section, string key, T fallback) where T : struct, Enum
-    {
-        var value = Raw(section, key);
-        if (value is null or "") return fallback;
-
-        if (System.Enum.TryParse<T>(value, ignoreCase: true, out var parsed))
-            return parsed;
-
-        var allowed = string.Join(", ", System.Enum.GetNames<T>()).ToLowerInvariant();
-        throw new FormatException($"[{section}] {key} = \"{value}\": expected one of {allowed}.");
-    }
-
     // Comma-separated. An empty value means an empty list, not "leave the default" — the
     // distinction matters when a user deliberately switches something off by clearing it.
     internal IReadOnlyList<string> List(string section, string key, IReadOnlyList<string> fallback)

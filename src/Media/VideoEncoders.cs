@@ -51,33 +51,20 @@ internal sealed record EncoderCapabilities(
     // card agree on — the one question a refusal message or a status page needs.
     internal bool AnyHdr => Hdr || Av1Hdr;
 
-    internal static EncoderCapabilities Refused(string refusal) =>
-        new(VideoEncoder.Auto, false, false, false, false, false, false, false, refusal);
+    internal static EncoderCapabilities Refused(VideoEncoder encoder, string refusal) =>
+        new(encoder, false, false, false, false, false, false, false, refusal);
 }
 
 // The choice and the opening of the encoder. The implementation follows the adapter that owns the
-// captured output unless [Video] Encoder names one; there is no fallback from a named one.
+// captured output; the codec is then the client's to pick from what the probe below found.
 internal static unsafe class VideoEncoders
 {
     // Opens and immediately closes an encoder at startup, so that /serverinfo reports what the card
     // can really do. On a device of its own: the capturer's does not exist yet.
-    internal static EncoderCapabilities Probe(GraphicsAdapter adapter, AppConfig config)
+    internal static EncoderCapabilities Probe(GraphicsAdapter adapter)
     {
-        var chosen = config.Encoder;
-        if (chosen == VideoEncoder.Auto)
-        {
-            chosen = adapter.IsNvidia ? VideoEncoder.NvEnc
-                : adapter.IsAmd ? VideoEncoder.Amf
-                : VideoEncoder.Auto;
-        }
-
-        if (chosen == VideoEncoder.Auto)
-        {
-            // Preflight refuses non-NVIDIA/AMD adapters before this runs, so reaching here means
-            // the rule there and the rule here have drifted apart — worth saying plainly.
-            return EncoderCapabilities.Refused(
-                $"adapter \"{adapter.Name}\" is neither NVIDIA nor AMD; there is no encoder for it.");
-        }
+        // Preflight refuses an adapter that is neither, so there is no third case to answer.
+        var chosen = adapter.IsNvidia ? VideoEncoder.NvEnc : VideoEncoder.Amf;
 
         void* device = null;
         void* context = null;
@@ -106,7 +93,7 @@ internal static unsafe class VideoEncoders
         }
         catch (Exception error)
         {
-            return EncoderCapabilities.Refused(
+            return EncoderCapabilities.Refused(chosen,
                 $"the encoder probe failed: {error.Message}");
         }
         finally
@@ -192,7 +179,7 @@ internal static unsafe class VideoEncoders
         var api = NvEnc.Api();
         if (api is null)
         {
-            return EncoderCapabilities.Refused(
+            return EncoderCapabilities.Refused(VideoEncoder.NvEnc,
                 "NVENC is not available: nvEncodeAPI64.dll could not be loaded. It ships with " +
                 "the NVIDIA display driver; installing or updating the driver is the fix.");
         }
@@ -209,7 +196,7 @@ internal static unsafe class VideoEncoders
         var status = api->OpenSessionEx(&open, &session);
         if (status != NvEnc.StatusSuccess)
         {
-            return EncoderCapabilities.Refused(
+            return EncoderCapabilities.Refused(VideoEncoder.NvEnc,
                 $"NVENC refused to open a session: {NvEnc.Describe(status)}. " +
                 "Updating the NVIDIA driver is the usual fix.");
         }
@@ -254,7 +241,7 @@ internal static unsafe class VideoEncoders
         var factory = Amf.Factory();
         if (factory is null)
         {
-            return EncoderCapabilities.Refused(
+            return EncoderCapabilities.Refused(VideoEncoder.Amf,
                 "AMF is not available: amfrt64.dll could not be loaded. It ships with the AMD " +
                 "display driver; installing or updating the driver is the fix.");
         }

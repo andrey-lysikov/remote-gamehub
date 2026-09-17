@@ -483,8 +483,7 @@ internal sealed class SessionManager : IDisposable
         var wantHdr = request.HdrRequested && _encoder.AnyHdr;
 
         var adaptation = DisplayAdaptation.Apply(screen, request.Width, request.Height, request.Fps,
-            wantHdr, _encoder.AnyHdr, _config.Adapt, scaleForClient: desktop && _config.ScaleDesktop,
-            _scales, isGame: !desktop);
+            wantHdr, _encoder.AnyHdr, scaleForClient: desktop, _scales, isGame: !desktop);
 
         lock (_gate) _display = adaptation;
     }
@@ -806,9 +805,7 @@ internal sealed class StreamSession : IDisposable
         _ended = ended;
         _gameTitle = gameTitle;
         _splash = splash;
-        // Off altogether turns off every pointer this server would draw of its own, the desktop's
-        // included: a game's own switch is an override of this, not something beside it.
-        _gamePointer = config.VirtualMouse && gamePointer;
+        _gamePointer = gamePointer;
 
         // A client from outside this network is on a link nobody measured, so it is given one level
         // less than the game asks for. Low is the floor: there is nothing below it to drop to.
@@ -936,24 +933,17 @@ internal sealed class StreamSession : IDisposable
             // Already done at /launch, before this game read the screen, when the client sent
             // mode/hdrMode there; otherwise done here, same as it always was.
             display = _preAdapted ?? DisplayAdaptation.Apply(_output, _negotiation.Width,
-                _negotiation.Height, _negotiation.Fps, hdr, _capabilities.AnyHdr, _config.Adapt,
-                scaleForClient: desktop && _config.ScaleDesktop,
-                _scales, isGame: !desktop);
+                _negotiation.Height, _negotiation.Fps, hdr, _capabilities.AnyHdr,
+                scaleForClient: desktop, _scales, isGame: !desktop);
 
             _input.SetScreen(display.Bounds);
 
-            // Into the desktop unless the virtual cursor is off, into a game when it was marked as
-            // needing one, or under Auto while a window waits in front: two pointers are worse than none.
-            _pointerFollowsWindow = !desktop && _config.VirtualMouse && !_gamePointer &&
-                                    _splash == SplashMode.Auto;
-            _drawPointer = (desktop && _config.VirtualMouse) || _gamePointer || _pointerFollowsWindow;
+            // Into the desktop always, into a game when it was marked as needing one, or under Auto
+            // while a window waits in front: two pointers are worse than none.
+            _pointerFollowsWindow = !desktop && !_gamePointer && _splash == SplashMode.Auto;
+            _drawPointer = desktop || _gamePointer || _pointerFollowsWindow;
 
-            if (desktop && !_config.VirtualMouse)
-            {
-                Log.Info("the virtual cursor is turned off, so the desktop stream carries no " +
-                         "pointer of this server's drawing");
-            }
-            else if (!desktop)
+            if (!desktop)
             {
                 Log.Info(_gamePointer ? "this game is marked as needing a pointer, so one is drawn into its picture"
                     : _pointerFollowsWindow ? "the pointer is drawn only while a window such as a launcher waits in front"

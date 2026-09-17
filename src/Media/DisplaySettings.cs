@@ -48,7 +48,7 @@ internal sealed class DisplayAdaptation : IDisposable
     // Adapts the screen as far as it can and returns what puts it back, keeping the replaced scale
     // in scales. Never throws: a screen that would not change is only worth a warning.
     internal static DisplayAdaptation Apply(DisplayOutput output, int width, int height, int fps,
-                                            bool wantHdr, bool canEncodeHdr, bool enabled,
+                                            bool wantHdr, bool canEncodeHdr,
                                             bool scaleForClient, ScaleStore scales,
                                             bool isGame = false)
     {
@@ -59,29 +59,22 @@ internal sealed class DisplayAdaptation : IDisposable
 
         try
         {
-            if (enabled)
-            {
-                // HDR first: turning advanced color on or off was seen resetting this screen back
-                // to its own mode, which would silently undo a resolution change made before it.
-                previousHdr = ApplyHdr(name, wantHdr, canEncodeHdr);
-                previousMode = ApplyMode(name, width, height, fps);
+            // HDR first: turning advanced color on or off was seen resetting this screen back
+            // to its own mode, which would silently undo a resolution change made before it.
+            previousHdr = ApplyHdr(name, wantHdr, canEncodeHdr);
+            previousMode = ApplyMode(name, width, height, fps);
 
-                if (scaleForClient)
-                {
-                    // By the size the client asked for, not the mode the screen landed on: up to 2K
-                    // the desktop is at 100%, above it scaled, whatever the screen managed.
-                    previousScale = ApplyScale(name, width, height, scales);
-                }
-                else if (isGame)
-                {
-                    // Always 100%, whatever an earlier desktop stream left: a game reading a stale
-                    // scale draws its UI and cursor wrong for as long as it runs.
-                    previousScale = ForceScale100(name, scales);
-                }
-            }
-            else
+            if (scaleForClient)
             {
-                Log.Info("[Display] Adapt is off; the screen is left exactly as it is");
+                // By the size the client asked for, not the mode the screen landed on: up to 2K
+                // the desktop is at 100%, above it scaled, whatever the screen managed.
+                previousScale = ApplyScale(name, width, height, scales);
+            }
+            else if (isGame)
+            {
+                // Always 100%, whatever an earlier desktop stream left: a game reading a stale
+                // scale draws its UI and cursor wrong for as long as it runs.
+                previousScale = ForceScale100(name, scales);
             }
         }
         catch (Exception error)

@@ -84,16 +84,6 @@ public class ConfFileTests
     }
 
     [Fact]
-    public void Enums_are_read_case_insensitively()
-    {
-        var file = ConfFile.Parse("[General]\nCodec = HEVC\n");
-        Assert.Equal(VideoCodec.Hevc, file.Enum("General", "Codec", VideoCodec.Auto));
-
-        var unknown = ConfFile.Parse("[General]\nCodec = vp9\n");
-        Assert.Throws<FormatException>(() => unknown.Enum("General", "Codec", VideoCodec.Auto));
-    }
-
-    [Fact]
     public void Lists_split_on_commas_unless_quoted_or_bracketed()
     {
         var file = ConfFile.Parse(

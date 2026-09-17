@@ -18,9 +18,6 @@ public class ConfFormatTests
             Debug = false,
             HostName = "Kitchen",
             Output = "1.0",
-            Encoder = VideoEncoder.NvEnc,
-            Adapt = false,
-            ScaleDesktop = false,
             PortBase = 48989,
             BindAddress = "192.168.1.20",
             WebPort = 8080,
@@ -35,7 +32,6 @@ public class ConfFormatTests
             BattleNet = true,
             GamesFolders = new[] { @"D:\Games", @"E:\Old, discs" },
             GamesDepth = 3,
-            GamesArtwork = false,
         };
 
         var read = ConfFormat.Read(ConfFile.Parse(ConfFormat.Write(written)), _ => { });
@@ -43,9 +39,6 @@ public class ConfFormatTests
         Assert.False(read.Debug);
         Assert.Equal("Kitchen", read.HostName);
         Assert.Equal("1.0", read.Output);
-        Assert.Equal(VideoEncoder.NvEnc, read.Encoder);
-        Assert.False(read.Adapt);
-        Assert.False(read.ScaleDesktop);
         Assert.Equal(48989, read.PortBase);
         Assert.Equal("192.168.1.20", read.BindAddress);
         Assert.Equal(8080, read.WebPort);
@@ -60,7 +53,6 @@ public class ConfFormatTests
         Assert.True(read.BattleNet);
         Assert.Equal(new[] { @"D:\Games", @"E:\Old, discs" }, read.GamesFolders);
         Assert.Equal(3, read.GamesDepth);
-        Assert.False(read.GamesArtwork);
     }
 
     [Fact]
@@ -122,16 +114,12 @@ public class ConfFormatTests
     {
         // What a file this server wrote before VirtualDisplay and [Display] existed looks like:
         // everything else present, those two gone entirely.
-        var file = ConfFile.Parse("[General]\nHostName = Kitchen\nVirtualMouse = true\n");
+        var file = ConfFile.Parse("[General]\nHostName = Kitchen\n");
         ConfFormat.Read(file, _ => { });
 
         Assert.Contains(("General", "VirtualDisplay"), file.MissingKeys);
         Assert.Contains(("Display", "Output"), file.MissingKeys);
-        Assert.Contains(("Display", "Encoder"), file.MissingKeys);
-        Assert.Contains(("Display", "Adapt"), file.MissingKeys);
-        Assert.Contains(("Display", "ScaleDesktop"), file.MissingKeys);
         Assert.DoesNotContain(("General", "HostName"), file.MissingKeys);
-        Assert.DoesNotContain(("General", "VirtualMouse"), file.MissingKeys);
     }
 
     [Theory]

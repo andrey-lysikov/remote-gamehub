@@ -608,8 +608,7 @@ internal sealed class WebConsole : IAsyncDisposable
                 ? WebAssets.Fill(WebAssets.Part("blocked"), ("blocked", BlockedList()))
                 : string.Empty),
 
-            // Not offered at all once the virtual cursor is off in the configuration file.
-            ("pointer", _config.VirtualMouse ? WebAssets.Part("pointer") : string.Empty),
+            ("pointer", WebAssets.Part("pointer")),
 
             ("log", Escape(ReadLogTail())));
     }
